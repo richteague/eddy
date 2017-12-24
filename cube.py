@@ -1,5 +1,6 @@
 """
-Image cube class to deproject the coordinates of the image.
+Image cube class to deproject the coordinates of the image. Inclination and
+position angle are in degrees, center offsets are in arcseconds.
 """
 
 import numpy as np
@@ -9,7 +10,7 @@ import scipy.constants as sc
 
 class imagecube:
 
-    def __init__(self, path):
+    def __init__(self, path, inc=0.0, pa=0.0, dx=0.0, dy=0.0):
         """Read in the image cube."""
 
         # Read in the data and header.
@@ -32,6 +33,11 @@ class imagecube:
 
         # Attempt to read the beamsize.
         self.bmin, self.bmaj, self.bpa = self._get_beam_params()
+
+        # Calculate the deprojected values.
+        self.inc, self.pa = inc, pa
+        self.dx, self.dy = dx, dy
+        self.rvals, self.tvals = self._deproject(inc, pa, dx, dy)
 
         return
 
@@ -93,7 +99,7 @@ class imagecube:
         omega = self._get_beamarea()
         return 1e-26 * sc.c**2 / self.restfreq**2 / 2. / sc.k / omega
 
-    def deprojected(self, inc=0.0, pa=0.0, dx=0.0, dy=0.0):
+    def _deproject(self, inc=0.0, pa=0.0, dx=0.0, dy=0.0):
         """Returns the deprojected polar pixel values in [arcsec, rad]."""
         x_sky = self.xaxis[None, :] * np.ones(self.nypix)[:, None] - dx
         y_sky = self.yaxis[:, None] * np.ones(self.nxpix)[None, :] - dy
