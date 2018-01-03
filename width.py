@@ -18,8 +18,9 @@ import numpy as np
 class linecube:
 
     def __init__(self, path, inc=0.0, dist=122., x0=0.0, y0=0.0,
-                 orientation='east', flared=True, nsigma=3, downsample=1,
-                 rmin=30., rmax=350., nbins=30., smooth=False, verbose=True):
+                 orientation='east', nearest='top', flaring=True, nsigma=3,
+                 downsample=1, rmin=30., rmax=350., nbins=30., smooth=False,
+                 verbose=True):
         """
         Initial instance of a line cube based on `imagecube`. The cube must be
         rotated such that the major axis is aligned with the x-axis.
@@ -32,7 +33,10 @@ class linecube:
         x0, y0:         Offset of star in [arcseconds].
         orientation:    Direction of the blue shifted half of the disk. This is
                         used to calculate the position angles of the pixels.
-        flared:         Boolean, if True, account for the flared emission
+        nearest:        Which of the sides of the disk is closest to the
+                        observer. If 'top' then the centre of the ellipses will
+                        shift downwards.
+        flaring:        Boolean, if True, account for the flared emission
                         surface when binning the annuli.
         nsigma:         Clip all voxels below nsigma * rms when calculating the
                         emission surface.
@@ -60,6 +64,9 @@ class linecube:
         if orientation.lower() not in ['east', 'west']:
             raise ValueError("Orientation must be 'east' or 'west'.")
         self.orientation = orientation.lower()
+        if nearest.lower() not in ['top', 'bottom']:
+            raise ValueError("Nearest must be 'top' or 'bottom'.")
+        self.nearest = nearest.lower()
         self.pa = 0.0 if self.orientation == 'east' else 180.
         self.rvals, self.tvals = self.cube._deproject(x0=self.x0,
                                                       y0=self.y0,
@@ -69,18 +76,17 @@ class linecube:
         # Use the flaring module to calculate the emission surface.
         # We only need z(r) so everything else is forgotten.
 
+        self.flaring = flaring
         self.nsigma = nsigma
         self.downsample = downsample
         self.rmin, self.rmax, self.nbins = rmin, rmax, nbins
         self.smooth = smooth
-        if self.flaring:
-            if self.verbose:
-                print("Calculating emission surface...")
-            self.surface = self.get_emission_surface()
-            if self.verbose:
-                print("Done.")
-        else:
-            self.surface = 0.0
+
+        if self.verbose:
+            print("Calculating emission surface...")
+        self.surface = self.get_emission_surface()
+        if self.verbose:
+            print("Done.")
 
         return
 
@@ -116,17 +122,15 @@ class linecube:
         if errors:
             raise NotImplementedError("Wait.")
 
-        # Define the radial sampling points and bin the pixels.
+        # Define the radial sampling points.
         if rpnts is None:
             rpnts = self.surface.x
         if width is None:
             width = np.mean(np.diff(rpnts))
-        rbins = np.linspace(rpnts[0] - 0.5 * width,
-                            rpnts[-1] + 0.5 * width,
-                            rpnts.size + 1)
-        rflat, tflat = self.rvals.flatten(), self.tvals.flatten()
+
+        # Flatten the arrays.
+        tflat = self.tvals.flatten()
         dflat = self.cube.data.reshape((self.cube.data.shape[0], -1)).T
-        ridxs = np.digitize(rflat, rbins)
 
         # Use scipy.optimize.minimize to find the rortation velocity at each
         # radial point. Define a function to minimize. TODO: Find out how to
@@ -138,37 +142,46 @@ class linecube:
             return self._fit_width(deprojected)
 
         p0 = []
-        for idx, radius in enumerate(rpnts):
-            spectra = dflat[ridxs == idx + 1]
-            angles = tflat[ridxs == idx + 1]
+        for radius in rpnts:
+            mask = self._mask_annuli(radius, width)
+            spectra, angles = dflat[mask], tflat[mask]
+            if spectra.size == 0:
+                p0.append(np.nan)
+                continue
             vrot = self._estimate_vrot(spectra)
             res = minimize(to_minimize, vrot, args=(spectra, angles),
                            method='Nelder-Mead')
             p0.append(res.x)
+        p0 = np.squeeze(p0)
 
-        return np.squeeze(p0)
+        if self.smooth > 1:
+            p0 = running_mean(p0, self.smooth)
+        return p0
 
     def get_emission_surface(self):
         """
         Derive the emission surface profile. See flaring.cube.linecube for
         more help.
 
-        - Output -
+        - Returns -
 
         surface:    Interpolation function for z(r), with both r and z in [au].
                     The values are linearly interpolated and extrapolated
                     beyond the bounds.
         """
-        cube = flaring.linecube(self.path, inc=self.inc, dist=self.dist,
-                                nsigma=self.nsigma, downsample=self.downsample)
-        r, z, _ = cube.emission_surface(rmin=self.rmin, rmax=self.rmax,
-                                        nbins=self.nbins)
-
-        # Apply a running mean to smooth out the profile then return a function
-        # to interpolate the value.
+        if not self.flaring:
+            r = np.linspace(self.rmin, self.rmax, self.nbins)
+            z = np.zeros(self.nbins)
+        else:
+            cube = flaring.linecube(self.path, inc=self.inc, dist=self.dist,
+                                    nsigma=self.nsigma,
+                                    downsample=self.downsample)
+            r, z, _ = cube.emission_surface(rmin=self.rmin, rmax=self.rmax,
+                                            nbins=self.nbins)
+            z = z[1]
         if self.smooth > 1:
-            z = np.squeeze([running_mean(zz) for zz in z])
-        return interp1d(r, z[1], fill_value='extrapolate')
+            z = running_mean(z, self.smooth)
+        return interp1d(r, z, fill_value='extrapolate')
 
     def _spectral_deproject(self, vrot, spectra, angles):
         """
@@ -182,7 +195,7 @@ class linecube:
         angles:     Position angle of the pixel in [radians], measured East
                     from the blue-shifted major axis.
 
-        - Output -
+        - Returns -
 
         deproj:     Average of all deprojected spectra.
         """
@@ -205,6 +218,29 @@ class linecube:
         ax.set_xlabel('Radius (au)')
         ax.set_ylabel('Height (au)')
         return ax
+
+    def _mask_annuli(self, radius, width):
+        """
+        Return a flattened mask of an anuulus. If flaring is specified, take
+        into account the offset.
+
+        - Input Variables -
+
+        radius:     Radius of the annulus in [au].
+        width:      Width of the annulus in [au].
+
+        - Returns -
+
+        mask:       Flattened boolean mask of pixels within the annulus.
+        """
+        yaxis = self.surface(radius) * np.sin(self.inc) / self.dist
+        if self.nearest == 'top':
+            yaxis *= -1.
+        yaxis = (self.cube.yaxis - yaxis) / np.cos(self.inc)
+        xaxis = self.cube.xaxis
+        mask = np.hypot(xaxis[None, :], yaxis[:, None]) - radius / self.dist
+        mask = np.where(abs(mask) <= 0.5 * width / self.dist, True, False)
+        return mask.flatten()
 
     def _fit_width(self, spectrum, failed=1e20):
         """Fit the spectrum with a Gaussian function."""
