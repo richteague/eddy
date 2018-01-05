@@ -18,7 +18,7 @@ import numpy as np
 class linecube:
 
     def __init__(self, path, inc=0.0, dist=122., x0=0.0, y0=0.0,
-                 orientation='east', nearest='top', flaring=True, nsigma=3,
+                 orientation='east', nearest='top', nsigma=3,
                  downsample=1, rmin=30., rmax=350., nbins=30., smooth=False,
                  verbose=True):
         """
@@ -35,9 +35,7 @@ class linecube:
                         used to calculate the position angles of the pixels.
         nearest:        Which of the sides of the disk is closest to the
                         observer. If 'top' then the centre of the ellipses will
-                        shift downwards.
-        flaring:        Boolean, if True, account for the flared emission
-                        surface when binning the annuli.
+                        shift downwards. If None, assume no flaring.
         nsigma:         Clip all voxels below nsigma * rms when calculating the
                         emission surface.
         downsample:     Number of channels to average over when calculating the
