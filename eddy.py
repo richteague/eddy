@@ -11,6 +11,7 @@ from imgcube.imagecube import imagecube
 from scipy.interpolate import interp1d
 from scipy.optimize import curve_fit
 from scipy.optimize import minimize
+from scipy.stats import binned_statistic_2d
 import flaring.cube as flaring
 import numpy as np
 import emcee
@@ -435,6 +436,41 @@ class linecube:
         angles = np.arctan2(yaxis[:, None], xaxis[None, :]).flatten()
         spectra = self.cube.data.reshape((self.cube.data.shape[0], -1)).T
         return spectra[mask], angles[mask]
+
+    def _bin_annulus(self, size, xaxis, yaxis, mask):
+        """
+        Bin the annulus into near beamsize areas and only select one value from
+        each of these. This helps reduce the number of pixels we are working
+        with, speeding up the calculation, and removes possible correlations.
+
+        - Input -
+
+        size:       Size of the bin size in the same units as xaxis and yaxis.
+        xaxis:      X-axis of the points.
+        yaxis:      Y-axis of the points.
+        mask:       Flattened boolean mask of the annulus.
+
+        - Returns -
+
+        mask:       Mask sampled such that only one sample per bin.
+        """
+
+        # Define the bin edges.
+        dx, dy = 0.5 * np.mean(np.diff(xaxis)), 0.5 * np.mean(np.diff(yaxis))
+        xedge = np.linspace(xaxis[0] - dx, xaxis[-1] + dx,
+                            int(np.ceil(abs(xaxis[-1] - xaxis[0]) / size)))
+        yedge = np.linspace(yaxis[0] - dy, yaxis[-1] + dy,
+                            int(np.ceil(abs(yaxis[-1] - yaxis[0]) / size)))
+
+        # Calculate the (x, y) coordinate of each of the masked values.
+        xpnts, ypnts = np.meshgrid(xaxis, yaxis)
+        xpnts = xpnts.flatten()[mask]
+        ypnts = ypnts.flatten()[mask]
+        dummy = np.arange(ypnts.size)
+        _, _, _, bins = binned_statistic_2d(xpnts, ypnts, dummy,
+                                            bins=[xedge, yedge])
+
+        return mask
 
     def _estimate_vrot(self, spectra):
         """Estimate the rotation velocity from line peaks."""
