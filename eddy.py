@@ -13,15 +13,23 @@ from scipy.optimize import curve_fit
 import flaring.cube as flaring
 import numpy as np
 import emcee
+import corner
 import celerite
 
 
 class linecube:
 
+    param_names = {}
+    param_names['SHO'] = [r'$v_{\rm rot}$', r'$\theta$',
+                          r'$\sigma_{\rm rms}$', r'$\log\,S_0$',
+                          r'$\log\,Q$', r'$\log\,\omega_0$']
+    param_names['M32'] = [r'$v_{\rm rot}$', r'$\theta$',
+                          r'$\sigma_{\rm rms}$', r'$\log\,\sigma$',
+                          r'$\log\,\rho$']
+
     def __init__(self, path, inc=49., dist=122., x0=0.0, y0=0.0,
-                 orientation='east', nearest='top',
-                 rmin=30., rmax=350., nbins=30., smooth=False,
-                 verbose=True):
+                 orientation='east', nearest='top', rmin=30., rmax=270.,
+                 nbins=30., verbose=True):
         """
         Initial instance of a line cube based on `imagecube`. The cube must be
         rotated such that the major axis is aligned with the x-axis.
@@ -41,7 +49,6 @@ class linecube:
         rmin:           Minimum radius for the surface profile in [au].
         rmax:           Maximum radius for the surface profile in [au].
         nbins:          Number of radial points between rmin and rmax.
-        smooth:         Number of points used in a running mean to smooth data.
         verbose:        Boolean describing if output message should be used.
         """
 
@@ -75,6 +82,8 @@ class linecube:
         # Define the radial sampling in [au].
         self.rmin, self.rmax, self.nbins = rmin, rmax, int(nbins)
         self.rpnts = np.linspace(self.rmin, self.rmax, self.nbins)
+
+        # By default the disk is assumed to be geometrically thin.
         self.surface = interp1d(self.rpnts, np.zeros(self.nbins),
                                 fill_value='extrapolate')
 
@@ -82,7 +91,7 @@ class linecube:
 
     def get_rotation_profile(self, rpnts=None, width=None, nwalkers=200,
                              nburnin=50, nsteps=150, sampling=None,
-                             kern='SHO'):
+                             kern='M32', plot=False):
         """
         Calculate the rotation profile using Gaussian Processes to model
         non-parametric spectra. The best model should be the smoothest model.
@@ -106,6 +115,7 @@ class linecube:
                     harmonic oscillator, 'SHO', or the Mattern32 kernel, 'M32'.
                     More information can be found at the celerite website,
                     http://celerite.readthedocs.io/en/stable/python/kernel/.
+        plot:       Plot the samples and corner plot for each radial point.
 
         - Output -
 
@@ -146,10 +156,19 @@ class linecube:
                                             args=(spectra, angles, vrot))
             sampler.run_mcmc(p0, nburnin + nsteps)
 
+            # Plot the sampling.
+            if plot:
+                self._plot_walkers(sampler, nburnin, kern)
+
             # Save the percentiles of the posterior.
             samples = sampler.chain[:, -nsteps:]
             samples = samples.reshape(-1, samples.shape[-1])
             pcnts.append(np.percentile(samples, [16, 50, 84], axis=0).T)
+
+            # Plot the corner plot.
+            if plot:
+                corner.corner(samples, quantiles=[0.16, 0.5, 0.84],
+                              show_titles=True, labels=self.param_names[kern])
 
             if self.verbose:
                 print("Completed %d out of %d." % (r + 1, len(rpnts)))
@@ -282,7 +301,6 @@ class linecube:
         - Output -
 
         loglike:    Log-likelihood calculated with geroge.
-
         """
 
         # Unpack the free parameters.
@@ -334,7 +352,6 @@ class linecube:
         - Input -
 
         theta:      Free parameters for the fit.
-                    respectively.
         spectra:    Array of the lines to deproject.
         angles:     Relative position angles of the spectra in [radians].
         vkep:       Keplerian velocity for the given radius in [m/s]. Not used
@@ -343,7 +360,6 @@ class linecube:
         - Output -
 
         loglike:    Log-likelihood calculated with geroge.
-
         """
 
         # Unpack the free parameters.
@@ -378,7 +394,10 @@ class linecube:
         k_line = celerite.terms.Matern32Term(log_sigma=lnsigma, log_rho=lnrho)
         kernel = k_noise + k_line
         gp = celerite.GP(kernel, mean=np.nanmean(y), fit_mean=True)
-        gp.compute(x)
+        try:
+            gp.compute(x)
+        except:
+            return -np.inf
 
         # Return the log-likelihood.
         ll = gp.log_likelihood(y, quiet=True)
@@ -510,6 +529,26 @@ class linecube:
         ax.set_xlabel('Radius (au)')
         ax.set_ylabel('Height (au)')
         return ax
+
+    def _plot_walkers(self, sampler, nburnin, kern):
+        """
+        Plot the samples used in the MCMC.
+
+        - Input -
+
+        sampler:    The emcee sampler object.
+        nburnin:    The number of steps used for the burn-in.
+        kern:       Name of the kernel.
+        """
+        nwalkers, nsamples, ndim = sampler.chain.shape
+        fig, axs = plt.subplots(ncols=ndim)
+        for a, ax in enumerate(axs):
+            for w in range(nwalkers):
+                ax.plot(sampler.chain[w, :, a], alpha=0.1)
+            ax.axvline(nburnin, ls='--', color='k')
+            ax.set_ylabel(self.param_names[kern][a])
+        plt.tight_layout()
+        return
 
     def _fit_width(self, spectrum, failed=1e20):
         """Fit the spectrum with a Gaussian function."""
