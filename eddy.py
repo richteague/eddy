@@ -81,7 +81,8 @@ class linecube:
         return
 
     def get_rotation_profile(self, rpnts=None, width=None, nwalkers=200,
-                             nburnin=50, nsteps=150, sampling=None):
+                             nburnin=50, nsteps=150, sampling=None,
+                             kern='SHO'):
         """
         Calculate the rotation profile using Gaussian Processes to model
         non-parametric spectra. The best model should be the smoothest model.
@@ -101,6 +102,10 @@ class linecube:
                     None, will use try to use the beamsize of the attached
                     cube. If all pixels are to be considered, use 0.0,
                     otherwise any value will do.
+        kern:       Kernel to use for the correlation. Either the simple
+                    harmonic oscillator, 'SHO', or the Mattern32 kernel, 'M32'.
+                    More information can be found at the celerite website,
+                    http://celerite.readthedocs.io/en/stable/python/kernel/.
 
         - Output -
 
@@ -118,6 +123,14 @@ class linecube:
         if sampling is None:
             sampling = self.cube.bmaj
 
+        # Check the kernel selection.
+        if kern not in ['SHO', 'M32']:
+            raise ValueError("Must specified either 'SHO' or 'M32'.")
+        elif kern == 'SHO':
+            log_probability = self._log_probability_SHO
+        else:
+            log_probability = self._log_probability_M32
+
         # Cycle through each radial point performing the fitting.
         pcnts = []
         ndim = 6
@@ -126,18 +139,10 @@ class linecube:
             # Find the annulus.
             spectra, angles = self._get_annulus(radius, width, sampling)
 
-            # Estimate the starting positions. The starting hyper-parameters
-            # are found from testing and applicable to a range of situations.
-            vrot = self._estimate_vrot(spectra)
-            noise = np.nanmean([self._estimate_noise(s) for s in spectra])**2
-            p0 = np.array([vrot, 1.0, noise, 3.0, -10., 5.0])[None, :]
-            dp0 = np.random.randn(nwalkers * ndim).reshape((nwalkers, ndim))
-            p0 = p0 * (1.0 + 3e-2 * dp0)
-            p0[:, 1] -= 1.0
-
             # Run the MCMC with **kwargs from the user.
+            p0, ndim, vrot = self._get_p0(spectra, kern)
             sampler = emcee.EnsembleSampler(nwalkers, ndim,
-                                            self._log_probability_gp,
+                                            log_probability,
                                             args=(spectra, angles, vrot))
             sampler.run_mcmc(p0, nburnin + nsteps)
 
@@ -152,6 +157,45 @@ class linecube:
         # Parse the variables and return.
         pcnts = np.rollaxis(np.squeeze(pcnts), 0, 3)
         return rpnts, pcnts[0], pcnts[1], pcnts[2:]
+
+    def _get_p0(self, spectra, kern, nwalkers):
+        """
+        Return the starting positions for the MCMC. The default starting
+        hyperparameters were found by testing multiple runs. With a sufficient
+        burn-in period it should still yield reasonable results.
+
+        - Input -
+
+        spectra:    Array of the spectra used for the fitting.
+        kern:       Kernel used for the fitting.
+        nwalkers:   Number of walkers used in the fitting.
+
+        - Returns -
+
+        p0:         Starting positions for the walkers.
+        ndim:       Number of dimensions.
+        vrot:       Estimated rotation velocity [m/s].
+        """
+
+        # Estimate values from the spectra.
+        vrot = self._estimate_vrot(spectra)
+        noise = np.nanmean([self._estimate_noise(s) for s in spectra])**2
+
+        # Best guesses for parameters.
+        p0 = [vrot, 1.0, noise]
+        if kern == 'SHO':
+            p0 += [3.0, -1.0, 5.0]
+        elif kern == 'M32':
+            p0 += [-2.0, 7.0]
+        else:
+            raise ValueError("Kern must be 'SHO' or 'M32'.")
+        ndim = len(p0)
+
+        # Include scatter and rescale the PA guess.
+        dp0 = np.random.randn(nwalkers * ndim).reshape((nwalkers, ndim))
+        p0 = p0[None, :] * (1.0 + 3e-2 * dp0)
+        p0[:, 1] -= 1.0
+        return p0, ndim, vrot
 
     def set_emission_surface_analytical(self, psi=None, z_0=None, z_q=1.0,
                                         r_0=None):
@@ -207,12 +251,6 @@ class linecube:
                     noise. Note that this shouldn't increase the channel size
                     above the linewidth.
         smooth:     Number of radial points to smooth over.
-
-        - Returns -
-
-        surface:    Interpolation function for z(r), with both r and z in [au].
-                    The values are linearly interpolated and extrapolated
-                    beyond the bounds.
         """
         if self.nearest is None:
             r = np.linspace(self.rmin, self.rmax, self.nbins)
@@ -227,7 +265,7 @@ class linecube:
             z = running_mean(z, smooth)
         return interp1d(r, z, fill_value='extrapolate')
 
-    def _log_probability_gp(self, theta, spectra, angles, vkep):
+    def _log_probability_SHO(self, theta, spectra, angles, vkep):
         """
         Log-probability function for the Gaussian Processes approach. This uses
         celerite to calculate the Gaussian processes. The kernel is the sum of
@@ -235,9 +273,7 @@ class linecube:
 
         - Input -
 
-        theta:      Free parameters for the fit: (vrot, posang, sigma, dV).
-                    These have units of [m/s], [radians], [K] and [m/s]
-                    respectively.
+        theta:      Free parameters for the fit.
         spectra:    Array of the lines to deproject.
         angles:     Relative position angles of the spectra in [radians].
         vkep:       Keplerian velocity for the given radius in [m/s]. Not used
@@ -281,6 +317,65 @@ class linecube:
         # Generate the Gaussian process.
         k_noise = celerite.terms.JitterTerm(log_sigma=np.log(noise))
         k_line = celerite.terms.SHOTerm(log_S0=lnS, log_Q=lnQ, log_omega0=lnw0)
+        kernel = k_noise + k_line
+        gp = celerite.GP(kernel, mean=np.nanmean(y), fit_mean=True)
+        gp.compute(x)
+
+        # Return the log-likelihood.
+        ll = gp.log_likelihood(y, quiet=True)
+        return ll if np.isfinite(ll) else -np.inf
+
+    def _log_probability_M32(self, theta, spectra, angles, vkep):
+        """
+        Log-probability function for the Gaussian Processes approach. This uses
+        celerite to calculate the Gaussian processes. The kernel is the sum of
+        a white noise term (JitterTerm) and the line (Matern32Term).
+
+        - Input -
+
+        theta:      Free parameters for the fit.
+                    respectively.
+        spectra:    Array of the lines to deproject.
+        angles:     Relative position angles of the spectra in [radians].
+        vkep:       Keplerian velocity for the given radius in [m/s]. Not used
+                    as a full prior but rather to set the bounds for vrot.
+
+        - Output -
+
+        loglike:    Log-likelihood calculated with geroge.
+
+        """
+
+        # Unpack the free parameters.
+        vrot, posang, noise, lnsigma, lnrho = theta
+
+        # Uninformative priors. The bounds for lnw0 are somewhat arbitrary and
+        # testing has shown that it makes little difference to the result. It
+        # is also highly correlated with lnQ which has a much broader prior.
+        if not 0.8 <= vrot / vkep <= 1.2:
+            return -np.inf
+        if abs(posang) > 0.2:
+            return -np.inf
+        if noise <= 0.0:
+            return -np.inf
+        if not np.isfinite(lnsigma):
+            return -np.inf
+        if not np.isfinite(lnrho):
+            return -np.inf
+
+        # Deproject the model and make sure arrays are sorted.
+        x = self.velax[None, :] + vrot * np.cos(angles)[:, None]
+        if x.shape == spectra.shape:
+            x = x.flatten()
+        else:
+            x = x.T.flatten()
+        y = spectra.flatten()
+        idxs = np.argsort(x)
+        x, y = x[idxs], y[idxs]
+
+        # Generate the Gaussian process.
+        k_noise = celerite.terms.JitterTerm(log_sigma=np.log(noise))
+        k_line = celerite.terms.Matern32Term(log_sigma=lnsigma, log_rho=lnrho)
         kernel = k_noise + k_line
         gp = celerite.GP(kernel, mean=np.nanmean(y), fit_mean=True)
         gp.compute(x)
