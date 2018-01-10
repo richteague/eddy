@@ -15,12 +15,12 @@ from scipy.stats import binned_statistic_2d
 import flaring.cube as flaring
 import numpy as np
 import emcee
-import george
+import celerite
 
 
 class linecube:
 
-    def __init__(self, path, inc=0.0, dist=122., x0=0.0, y0=0.0,
+    def __init__(self, path, inc=49., dist=122., x0=0.0, y0=0.0,
                  orientation='east', nearest='top', nsigma=3,
                  downsample=1, rmin=30., rmax=350., nbins=30., smooth=False,
                  verbose=True):
@@ -91,13 +91,11 @@ class linecube:
 
         return
 
-    def gaussian_processes(self, rpnts=None, width=None, nwalkers=50,
-                           nsteps=50, nburnin=50):
+    def gaussian_processes(self, rpnts=None, width=None, nwalkers=200,
+                           nsteps=150, nburnin=50):
         """
         Calculate the rotation profile using Gaussian Processes to model
         non-parametric spectra. The best model should be the smoothest model.
-        This does not require a model beforehand which should speed up the
-        fitting.
 
         - Input -
 
@@ -117,8 +115,6 @@ class linecube:
         vrot:       Percentiles of the posterior distribution of vrot [m/s].
         posang:     Percentiles of the posterior distribution for the position
                     angle [degrees].
-        hyper:      Posterior distributions of the hyper-parameters used in the
-                    fitting.
         """
 
         # Define the radial sampling points.
@@ -129,36 +125,41 @@ class linecube:
 
         # Cycle through each radial point performing the fitting.
         pcnts = []
-        for radius in rpnts:
+        ndim = 6
+        for r, radius in enumerate(rpnts):
 
             # Find the annulus.
             spectra, angles = self._get_annulus(radius, width)
 
-            # Estimate the starting positions.
-            p0 = np.array([self._estimate_vrot(spectra),
-                           0.0,
-                           0.5 * np.nanvar(spectra),
-                           self._estimate_width(spectra)])
-            dp = 1e-2 * np.random.randn(nwalkers * 2).reshape((nwalkers, 4))
-            p0 *= 1.0 + dp
+            # Estimate the starting positions. The starting hyper-parameters
+            # are found from testing and applicable to a range of situations.
+            vrot = self._estimate_vrot(spectra)
+            noise = np.nanmean([self._estimate_noise(s) for s in spectra])**2
+            p0 = np.array([vrot, 1.0, noise, 3.0, -10., 5.0])[None, :]
+            dp0 = np.random.randn(nwalkers * ndim).reshape((nwalkers, ndim))
+            p0 = p0 * (1.0 + 3e-2 * dp0)
+            p0[:, 1] -= 1.0
 
             # Run the MCMC with **kwargs from the user.
-            sampler = emcee.EnsembleSampler(nwalkers, 4,
+            sampler = emcee.EnsembleSampler(nwalkers, ndim,
                                             self._log_probability_gp,
-                                            args=(spectra, angles))
-            sampler.run_mcmc(np.squeeze(p0).T, nburnin + nsteps)
+                                            args=(spectra, angles, vrot))
+            sampler.run_mcmc(p0, nburnin + nsteps)
 
             # Save the percentiles of the posterior.
             samples = sampler.chain[:, -nsteps:]
             samples = samples.reshape(-1, samples.shape[-1])
             pcnts.append(np.percentile(samples, [16, 50, 84], axis=0).T)
 
+            if self.verbose:
+                print("Completed %d out of %d." % (r + 1, len(rpnts)))
+
         # Parse the variables and return.
         pcnts = np.rollaxis(np.squeeze(pcnts), 0, 3)
         return rpnts, pcnts[0], pcnts[1], pcnts[2:]
 
     def get_rotation_profile(self, rpnts=None, width=None, errors=False,
-                             nwalkers=50, nburnin=50, nsteps=50):
+                             nwalkers=200, nburnin=150, nsteps=50):
         """
         Derive the rotation profile by minimizing the width of the average of
         the deprojected spectra. The inital value is found by using scipy's
@@ -190,6 +191,8 @@ class linecube:
                     [16, 50, 84] percentiles for each radial point, otherwise
                     it is just a len(rpnts) array.
         angle:      Relative position angle of the annulus in [degrees].
+        hyper       Hyper-parameters for the kernel. This allows the genreation
+                    of model spectra.
         """
 
         # Define the radial sampling points.
@@ -285,11 +288,11 @@ class linecube:
             z = running_mean(z, self.smooth)
         return interp1d(r, z, fill_value='extrapolate')
 
-    def _log_probability_gp(self, theta, spectra, angles):
+    def _log_probability_gp(self, theta, spectra, angles, vkep):
         """
-        Log-probability function for the Gaussian Processes approach. We keep
-        nearly all functionality within this function which is probably not a
-        good idea.
+        Log-probability function for the Gaussian Processes approach. This uses
+        celerite to calculate the Gaussian processes. The kernel is the sum of
+        a white noise term (JitterTerm) and the line (SHOTerm).
 
         - Input -
 
@@ -298,6 +301,8 @@ class linecube:
                     respectively.
         spectra:    Array of the lines to deproject.
         angles:     Relative position angles of the spectra in [radians].
+        vkep:       Keplerian velocity for the given radius in [m/s]. Not used
+                    as a full prior but rather to set the bounds for vrot.
 
         - Output -
 
@@ -306,33 +311,39 @@ class linecube:
         """
 
         # Unpack the free parameters.
-        vrot, posang, sigma, dV = theta
+        vrot, posang, noise, lnS, lnQ, lnw0 = theta
 
-        # Enforce flat priors.
-        if vrot <= 0.0:
+        # Uninformative priors. The bounds for lnw0 are somewhat arbitrary and
+        # testing has shown that it makes little difference to the result. It
+        # is also highly correlated with lnQ which has a much broader prior.
+        if not 0.8 <= vrot / vkep <= 1.2:
             return -np.inf
         if abs(posang) > 0.2:
             return -np.inf
-        if sigma > np.nanmax(spectra):
+        if noise <= 0.0:
             return -np.inf
-        if dV <= 0.0:
+        if not np.isfinite(lnS):
             return -np.inf
+        if not -16. < lnQ < 0.:
+            return -np.inf
+        if not 4.0 <= lnw0 <= 6.0:
+            return - np.inf
 
-        # Deproject the model.
+        # Deproject the model and make sure arrays are sorted.
         x = self.velax[None, :] + vrot * np.cos(angles)[:, None]
         if x.shape == spectra.shape:
             x = x.flatten()
         else:
             x = x.T.flatten()
         y = spectra.flatten()
+        idxs = np.argsort(x)
+        x, y = x[idxs], y[idxs]
 
         # Generate the Gaussian process.
-        white_noise = np.log(np.nanvar(y[abs(x) > 3. * dV]))
-        if not np.isfinite(white_noise):
-            white_noise = np.log(np.nanvar(y))
-        kernel = sigma**2 * george.kernels.ExpSquaredKernel(dV**2)
-        gp = george.GP(kernel, mean=np.nanmean(y), fit_mean=True,
-                       white_noise=white_noise, fit_white_noise=True)
+        k_noise = celerite.terms.JitterTerm(log_sigma=np.log(noise))
+        k_line = celerite.terms.SHOTerm(log_S0=lnS, log_Q=lnQ, log_omega0=lnw0)
+        kernel = k_noise + k_line
+        gp = celerite.GP(kernel, mean=np.nanmean(y), fit_mean=True)
         gp.compute(x)
 
         # Return the log-likelihood.
