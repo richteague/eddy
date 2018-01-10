@@ -10,6 +10,7 @@ from prettyplots.prettyplots import running_mean
 from imgcube.imagecube import imagecube
 from scipy.interpolate import interp1d
 from scipy.optimize import curve_fit
+from scipy.optimize import minimize
 import flaring.cube as flaring
 import numpy as np
 import emcee
@@ -19,8 +20,8 @@ import celerite
 class linecube:
 
     def __init__(self, path, inc=49., dist=122., x0=0.0, y0=0.0,
-                 orientation='east', nearest='top',
-                 rmin=30., rmax=350., nbins=30., smooth=False,
+                 orientation='east', nearest='top', nsigma=3,
+                 downsample=1, rmin=30., rmax=350., nbins=30., smooth=False,
                  verbose=True):
         """
         Initial instance of a line cube based on `imagecube`. The cube must be
@@ -38,6 +39,10 @@ class linecube:
         nearest:        Which of the sides of the disk is closest to the
                         observer. If 'top' then the centre of the ellipses will
                         shift downwards. If None, assume no flaring.
+        nsigma:         Clip all voxels below nsigma * rms when calculating the
+                        emission surface.
+        downsample:     Number of channels to average over when calculating the
+                        emission surface.
         rmin:           Minimum radius for the surface profile in [au].
         rmax:           Maximum radius for the surface profile in [au].
         nbins:          Number of radial points between rmin and rmax.
@@ -72,16 +77,24 @@ class linecube:
                                                       inc=self.inc,
                                                       pa=self.pa)
 
-        # Define the radial sampling in [au].
-        self.rmin, self.rmax, self.nbins = rmin, rmax, int(nbins)
-        self.rpnts = np.linspace(self.rmin, self.rmax, self.nbins)
-        self.surface = interp1d(self.rpnts, np.zeros(self.nbins),
-                                fill_value='extrapolate')
+        # Use the flaring module to calculate the emission surface.
+        # We only need z(r) so everything else is forgotten.
+
+        self.nsigma = nsigma
+        self.downsample = downsample
+        self.rmin, self.rmax, self.nbins = rmin, rmax, nbins
+        self.smooth = smooth
+
+        if self.verbose:
+            print("Calculating emission surface...")
+        self.surface = self.get_emission_surface()
+        if self.verbose:
+            print("Done.")
 
         return
 
-    def get_rotation_profile(self, rpnts=None, width=None, nwalkers=200,
-                             nburnin=50, nsteps=150, sampling=None):
+    def gaussian_processes(self, rpnts=None, width=None, nwalkers=200,
+                           nburnin=50, nsteps=150, sampling=None):
         """
         Calculate the rotation profile using Gaussian Processes to model
         non-parametric spectra. The best model should be the smoothest model.
@@ -153,60 +166,115 @@ class linecube:
         pcnts = np.rollaxis(np.squeeze(pcnts), 0, 3)
         return rpnts, pcnts[0], pcnts[1], pcnts[2:]
 
-    def set_emission_surface_analytical(self, psi=None, z_0=None, z_q=1.0,
-                                        r_0=None):
+    def get_rotation_profile(self, rpnts=None, width=None, errors=False,
+                             nwalkers=200, nburnin=150, nsteps=50):
         """
-        Use an analytical prescription for the emission surface instead. Two
-        options are available: a conical shape following Rosenfeld et al.
-        (2013) where the surface is described by an opening angle between the
-        surface and the midplane (~15 degrees for 12CO). Alternatively use a
-        power-law description of the form:
+        Derive the rotation profile by minimizing the width of the average of
+        the deprojected spectra. The inital value is found by using scipy's
+        minimize function which is relatively fast.
 
-            z(r) = z_0 * (r / r_0)^(z_q)
+        If errors are wanted, thess values are used as the models for emcee
+        runs which estimate the posterior on vrot. This is relatively time
+        consuming so make sure that the simple minimize approach works well
+        first.
 
-        which allows for a more flared surface.
+        - Input Variables -
 
-        Note that both of these options are monotonically increasing or
-        decreasing with radius and thus may be a poor fit in the outer disk
-        where the emission surface decreases,
+        rpnts:      Array of radial points to calculate the rotation profile.
+                    If None then will use the radial sampling of the surface
+                    profile.
+        width:      Width of the annuli in [arcsec]. If None is specified, will
+                    use the spacing of rpnts.
+        errors:     If True, use an MCMC approach to estimate uncertainties on
+                    vrot. This will take much longer.
+        nwalkers:   Number of walkers used for the MCMC runs.
+        nburnin:    Number of steps used for the burn-in of the MCMC run.
+        nsteps:     Number of steps to use for the production MCMC runs.
 
-        - Input -
+        - Output -
 
-        psi:        Opening angle [degrees] of the conical surface.
-        z_0:        Height of the emission surface at r_0 in [au].
-        z_q:        Exponent for the power-law surface.
-        r_0:        Characteristic radius for the power-law surface. By default
-                    this is self.rmin.
+        rpnts:      Radial sampling points in [au].
+        vrot:       Rotation profile in [m/s] at the sampled points. If errors
+                    is True, this is a [3 x len(rpnts)] array with the
+                    [16, 50, 84] percentiles for each radial point, otherwise
+                    it is just a len(rpnts) array.
+        angle:      Relative position angle of the annulus in [degrees].
+        hyper       Hyper-parameters for the kernel. This allows the genreation
+                    of model spectra.
         """
 
-        if psi is not None and z_0 is not None:
-            raise ValueError("Specify either 'psi' or 'z_0', not both.")
+        # Define the radial sampling points.
+        if rpnts is None:
+            rpnts = self.surface.x
+        if width is None:
+            width = np.mean(np.diff(rpnts))
 
-        # Flat surface.
-        if psi is not None:
-            z = self.rpnts * np.tan(np.radians(psi))
-            self.surface = interp1d(self.rpnts, z, fill_value='extrapolate')
-            return
+        # Use scipy.optimize.minimize to find the rortation velocity at each
+        # radial point. Allows for the position angle to be free too.
+        if self.verbose:
+            print("Running minimization for %d points..." % self.nbins)
 
-        # Power-law surface.
-        if r_0 is None:
-            r_0 = self.rmin
-        z = z_0 * np.power(self.rpnts / r_0, z_q)
-        self.surface = interp1d(self.rpnts, z, fill_value='extrapolate')
-        return
+        p0 = []
+        models = []
+        for radius in rpnts:
+            spectra, angles = self._get_annulus(radius, width)
 
-    def set_emission_surface_data(self, nsigma=3, downsample=1, smooth=1):
+            if spectra.size < 3:
+                p0.append([np.nan, np.nan])
+                continue
+
+            vrot = self._estimate_vrot(spectra)
+            res = minimize(self._to_minimize, (vrot, 0.0),
+                           args=(spectra, angles), method='Nelder-Mead')
+            p0.append(res.x)
+            models.append(self._spectral_deproject(res.x[0], spectra,
+                                                   angles, res.x[1]))
+        p0 = np.squeeze(p0).T
+        models = np.squeeze(models)
+        if self.verbose:
+            print("Done.")
+
+        # Smooth the data if appropriate.
+        if self.smooth > 1:
+            p0 = np.squeeze([running_mean(p, self.smooth) for p in p0])
+
+        # If no errors are required, return the values.
+        if not errors:
+            return rpnts, p0[0], np.degrees(p0[1])
+
+        # TODO: Probably a hugely more efficient way to do this.
+        pcnts = []
+        if self.verbose:
+            print("Using models to run MCMC...")
+
+        for radius, model in zip(rpnts, models):
+            vrot = self._estimate_vrot(spectra)
+            noise = self._estimate_noise(model)
+            spectra, angles = self._get_annulus(radius, width)
+
+            if spectra.shape[0] < 3:
+                pcnts.append(np.zeros((2, 3)))
+                continue
+
+            p0 = [vrot + np.random.randn(nwalkers), np.random.randn(nwalkers)]
+            args = (spectra, angles, model, noise)
+            sampler = emcee.EnsembleSampler(nwalkers, 2,
+                                            self._log_probability,
+                                            args=args)
+            sampler.run_mcmc(np.squeeze(p0).T, nsteps+nburnin)
+            samples = sampler.chain[:, -nsteps:]
+            samples = samples.reshape((-1, samples.shape[-1]))
+            pcnts.append(np.percentile(samples, [16, 50, 84], axis=0).T)
+        if self.verbose:
+            print("Done.")
+
+        pcnts = np.rollaxis(np.squeeze(pcnts), 0, 3)
+        return rpnts, pcnts[0], pcnts[1]
+
+    def get_emission_surface(self):
         """
-        Derive the emission surface profile following the method of Pinte et
-        al. (2018) (https://ui.adsabs.harvard.edu/#abs/2017arXiv171006450P).
-
-        - Input -
-
-        nsigma:     The sigma clipping value.
-        downsample: Downsample the cube by this factor to improve signal to
-                    noise. Note that this shouldn't increase the channel size
-                    above the linewidth.
-        smooth:     Number of radial points to smooth over.
+        Derive the emission surface profile. See flaring.cube.linecube for
+        more help.
 
         - Returns -
 
@@ -219,12 +287,13 @@ class linecube:
             z = np.zeros(self.nbins)
         else:
             cube = flaring.linecube(self.path, inc=self.inc, dist=self.dist,
-                                    nsigma=nsigma, downsample=downsample)
+                                    nsigma=self.nsigma,
+                                    downsample=self.downsample)
             r, z, _ = cube.emission_surface(rmin=self.rmin, rmax=self.rmax,
                                             nbins=self.nbins)
             z = z[1]
-        if smooth > 1:
-            z = running_mean(z, smooth)
+        if self.smooth > 1:
+            z = running_mean(z, self.smooth)
         return interp1d(r, z, fill_value='extrapolate')
 
     def _log_probability_gp(self, theta, spectra, angles, vkep):
@@ -288,6 +357,74 @@ class linecube:
         # Return the log-likelihood.
         ll = gp.log_likelihood(y, quiet=True)
         return ll if np.isfinite(ll) else -np.inf
+
+    def _log_probability(self, theta, spectra, angles, model, noise):
+        """
+        Log-probability function for the MCMC modelling. Wrapper for _log_prior
+        and _log_likelihood functions.
+        """
+        lp = self._log_prior(theta)
+        if np.isfinite(lp):
+            return self._log_likelihood(theta, spectra, angles, model, noise)
+        return -np.inf
+
+    def _log_likelihood(self, theta, spectra, angles, model, noise):
+        """
+        Log-likelihood function for the MCMC modelling.
+
+        theta:      Free parameters for the fit: vrot [m/s] and pa [degrees].
+        spectra:    Spectra to deproject and average over.
+        angles:     Relative position angles of the pixels [radians].
+        model:      Model spectra from the scipy.optimize.minimize fit.
+        noise:      RMS noise of the model calculate with _estimate_rms.
+
+        - Returns -
+
+        lnx2:       Log-chi-squared value.
+        """
+        attempt = self._spectral_deproject(theta[0], spectra, angles,
+                                           np.radians(theta[1]))
+        lnx2 = np.nansum(np.power((attempt - model) / noise, 2))
+        return -0.5 * (lnx2 + np.log(noise**2 * np.sqrt(2. * np.pi)))
+
+    def _log_prior(self, theta):
+        """
+        Log-prior function for the MCMC modelling.
+
+        - Input -
+
+        theta:      Free parameters for the fit: vrot [m/s] and pa [degrees].
+
+        - Output -
+
+        lp:         Log prior value, 0.0 if allowed, -np.inf otherwise.
+        """
+        if theta[0] <= 0.0:
+            return -np.inf
+        if abs(theta[1]) > 10.:
+            return - np.inf
+        return 0.0
+
+    def _spectral_deproject(self, vrot, spectra, angles, pa=0.0):
+        """
+        Deperoject the spectra to a common center. It is assumed that all share
+        the same velocity axis: self.cube.velax.
+
+        - Input Variables -
+
+        vrot:       Rotation velocity used for the deprojection in [m/s].
+        spectra:    Array of spectra to deproject.
+        angles:     Position angle of the pixel in [radians], measured East
+                    from the blue-shifted major axis.
+        pa:         Optional position angle value.
+
+        - Returns -
+
+        deproj:     Average of all deprojected spectra.
+        """
+        deproj = [np.interp(self.velax, self.velax + vrot * np.cos(t + pa), s)
+                  for s, t in zip(spectra, angles)]
+        return np.average(deproj, axis=0)
 
     def _get_annulus(self, radius, width, sampling=0.0):
         """
@@ -427,6 +564,14 @@ class linecube:
             return popt[1]
         except:
             return failed
+
+    def _to_minimize(self, theta, spectra, angles):
+        """Return width of the average of deprojected spectra."""
+        vrot, pa = theta
+        if abs(pa) > 0.4:
+            return 1e20
+        deprojected = self._spectral_deproject(vrot, spectra, angles, pa)
+        return self._fit_width(deprojected)
 
 
 def gaussian(x, x0, dx, A):
