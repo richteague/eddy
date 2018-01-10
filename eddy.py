@@ -11,7 +11,6 @@ from imgcube.imagecube import imagecube
 from scipy.interpolate import interp1d
 from scipy.optimize import curve_fit
 from scipy.optimize import minimize
-from scipy.stats import binned_statistic_2d
 import flaring.cube as flaring
 import numpy as np
 import emcee
@@ -59,6 +58,9 @@ class linecube:
         self.dist = dist
         self.inc = inc
 
+        self.xaxis, self.yaxis = self.cube.xaxis, self.cube.yaxis
+        self.data = self.cube.data
+
         # Orientation of the disk. Note that this is not the true position
         # angle of the disk, rather just used interally.
 
@@ -92,7 +94,7 @@ class linecube:
         return
 
     def gaussian_processes(self, rpnts=None, width=None, nwalkers=200,
-                           nsteps=150, nburnin=50):
+                           nsteps=150, nburnin=50, sampling=0.0):
         """
         Calculate the rotation profile using Gaussian Processes to model
         non-parametric spectra. The best model should be the smoothest model.
@@ -129,7 +131,7 @@ class linecube:
         for r, radius in enumerate(rpnts):
 
             # Find the annulus.
-            spectra, angles = self._get_annulus(radius, width)
+            spectra, angles = self._get_annulus(radius, width, sampling)
 
             # Estimate the starting positions. The starting hyper-parameters
             # are found from testing and applicable to a range of situations.
@@ -418,15 +420,19 @@ class linecube:
                   for s, t in zip(spectra, angles)]
         return np.average(deproj, axis=0)
 
-    def _get_annulus(self, radius, width):
+    def _get_annulus(self, radius, width, sampling=0.0):
         """
-        Return an annulus of pixels at a given radius and width. Will take into
-        account the offset from a flared emission surface.
+        Return all pixels which fall within an annulus of the given radius and
+        width. The deprojection will take into account any flaring through
+        self.surface(). If sampling is provided, will return a pixel roughly
+        every `sampling` arcseconds.
 
-        - Input Variables -
+        - Input -
 
         radius:     Radius of the annulus in [au].
         width:      Width of the annulus in [au].
+        sampling:   The spatial sampling rate in [arcseconds]. Typically the
+                    beam major axis.
 
         - Returns -
 
@@ -434,11 +440,64 @@ class linecube:
         angles:     Relative position angles for all the spectra.
         """
 
-        xaxis = self.cube.xaxis
+        # Calculate the deprojected axes.
+        xaxis = self.xaxis
         yaxis = self.surface(radius) * np.sin(self.inc) / self.dist
         if self.nearest == 'bottom':
             yaxis *= -1.
-        yaxis = (self.cube.yaxis - yaxis) / np.cos(self.inc)
+        yaxis = (self.yaxis - yaxis) / np.cos(self.inc)
+
+        # Flat arrays of the pixel coordinates.
+        rpnts = np.hypot(yaxis[:, None], xaxis[None, :]).flatten() * self.dist
+        tpnts = np.arctan2(yaxis[:, None], xaxis[None, :]).flatten()
+        xpnts, ypnts = np.meshgrid(self.xaxis, self.yaxis)
+        xpnts, ypnts = xpnts.flatten(), ypnts.flatten()
+        dflat = self.data.reshape(self.data.shape[0], -1).T
+
+        # Define the radial mask.
+        rmask = np.where(abs(rpnts - radius) < 0.5 * width, True, False)
+
+        if sampling > abs(np.mean([np.diff(self.xaxis), np.diff(self.yaxis)])):
+
+            # Create the bins used to sample the pixels further.
+            nx = int(abs(self.xaxis[0] - self.xaxis[-1]) / sampling)
+            ny = int(abs(self.yaxis[0] - self.yaxis[-1]) / sampling)
+            xbins = np.linspace(self.xaxis[0], self.xaxis[-1], nx)
+            ybins = np.linspace(self.yaxis[0], self.yaxis[-1], ny)
+            dx = 0.5 * np.mean([abs(np.diff(xbins)), abs(np.diff(ybins))])
+            rbins = np.hypot(ybins[:, None], xbins[None, :]) * self.dist
+            rbins = np.where(abs(rbins - radius) < 4 * width, True, False)
+
+            pixels, angles = [], []
+
+            # Cycle through each bin, selecting all pixels which are possible.
+            # Then, for the selection of pixels, randomly select one.
+            for xidx, xbin in enumerate(xbins):
+                for yidx, ybin in enumerate(ybins):
+
+                    if not rbins[yidx, xidx]:
+                        continue
+
+                    in_x = abs(xpnts - xbin) < dx
+                    in_y = abs(ypnts - ybin) < dx
+                    mask = rmask * in_x * in_y
+
+                    if np.sum(mask) == 0.0:
+                        continue
+
+                    temp_pixels = dflat[mask]
+                    temp_angles = tpnts[mask]
+                    npix = temp_pixels.shape[0]
+                    if npix == 1:
+                        idx = 0
+                    else:
+                        idx = np.random.randint(0, npix - 1)
+                    pixels += [temp_pixels[idx]]
+                    angles += [temp_angles[idx]]
+
+            return np.squeeze(pixels), np.squeeze(angles)
+        else:
+            return dflat[rmask], tpnts[rmask]
 
         mask = np.hypot(xaxis[None, :], yaxis[:, None]) - radius / self.dist
         mask = np.where(abs(mask) <= 0.5 * width / self.dist, True, False)
@@ -447,41 +506,6 @@ class linecube:
         angles = np.arctan2(yaxis[:, None], xaxis[None, :]).flatten()
         spectra = self.cube.data.reshape((self.cube.data.shape[0], -1)).T
         return spectra[mask], angles[mask]
-
-    def _bin_annulus(self, size, xaxis, yaxis, mask):
-        """
-        Bin the annulus into near beamsize areas and only select one value from
-        each of these. This helps reduce the number of pixels we are working
-        with, speeding up the calculation, and removes possible correlations.
-
-        - Input -
-
-        size:       Size of the bin size in the same units as xaxis and yaxis.
-        xaxis:      X-axis of the points.
-        yaxis:      Y-axis of the points.
-        mask:       Flattened boolean mask of the annulus.
-
-        - Returns -
-
-        mask:       Mask sampled such that only one sample per bin.
-        """
-
-        # Define the bin edges.
-        dx, dy = 0.5 * np.mean(np.diff(xaxis)), 0.5 * np.mean(np.diff(yaxis))
-        xedge = np.linspace(xaxis[0] - dx, xaxis[-1] + dx,
-                            int(np.ceil(abs(xaxis[-1] - xaxis[0]) / size)))
-        yedge = np.linspace(yaxis[0] - dy, yaxis[-1] + dy,
-                            int(np.ceil(abs(yaxis[-1] - yaxis[0]) / size)))
-
-        # Calculate the (x, y) coordinate of each of the masked values.
-        xpnts, ypnts = np.meshgrid(xaxis, yaxis)
-        xpnts = xpnts.flatten()[mask]
-        ypnts = ypnts.flatten()[mask]
-        dummy = np.arange(ypnts.size)
-        _, _, _, bins = binned_statistic_2d(xpnts, ypnts, dummy,
-                                            bins=[xedge, yedge])
-
-        return mask
 
     def _estimate_vrot(self, spectra):
         """Estimate the rotation velocity from line peaks."""
