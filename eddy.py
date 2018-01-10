@@ -6,6 +6,7 @@ profile.
 """
 
 import matplotlib.pyplot as plt
+import scipy.constants as sc
 from prettyplots.prettyplots import running_mean
 from imgcube.imagecube import imagecube
 from scipy.interpolate import interp1d
@@ -21,13 +22,13 @@ class linecube:
 
     param_names = {}
     param_names['SHO'] = [r'$v_{\rm rot}$', r'$\theta$',
-                          r'$\sigma_{\rm rms}$', r'$\log\,S_0$',
+                          r'$\sigma_{\rm rms}^2$', r'$\log\,S_0$',
                           r'$\log\,Q$', r'$\log\,\omega_0$']
     param_names['M32'] = [r'$v_{\rm rot}$', r'$\theta$',
-                          r'$\sigma_{\rm rms}$', r'$\log\,\sigma$',
+                          r'$\sigma_{\rm rms}^2$', r'$\log\,\sigma$',
                           r'$\log\,\rho$']
 
-    def __init__(self, path, inc=49., dist=122., x0=0.0, y0=0.0,
+    def __init__(self, path, inc=49., dist=122., x0=0.0, y0=0.0, mstar=2.33,
                  orientation='east', nearest='top', rmin=30., rmax=270.,
                  nbins=30., verbose=True):
         """
@@ -40,6 +41,7 @@ class linecube:
         inc:            Inclination of the disk in [degrees].
         dist:           Distance to disk in [pc].
         x0, y0:         Offset of star in [arcseconds].
+        mstar:          Mass of the star in [Msun].
         orientation:    Direction of the blue shifted half of the disk. This is
                         used to calculate the position angles of the pixels.
                         Note that 'east' is to the left.
@@ -60,6 +62,7 @@ class linecube:
         self.dist = dist
         self.inc = inc
 
+        self.mstar = mstar
         self.xaxis, self.yaxis = self.cube.xaxis, self.cube.yaxis
         self.data = self.cube.data
 
@@ -89,12 +92,14 @@ class linecube:
 
         return
 
-    def get_rotation_profile(self, rpnts=None, width=None, nwalkers=200,
-                             nburnin=50, nsteps=150, sampling=None,
+    def get_rotation_profile(self, rpnts=None, width=None, nwalkers=100,
+                             nburnin=100, nsteps=50, sampling=None,
                              kern='M32', plot=False):
         """
         Calculate the rotation profile using Gaussian Processes to model
         non-parametric spectra. The best model should be the smoothest model.
+        Note that within the burn-in, sometimes the hyperparameters will not
+        have sufficiently burnt in, although (vrot, pa) will have.
 
         - Input -
 
@@ -150,10 +155,12 @@ class linecube:
             spectra, angles = self._get_annulus(radius, width, sampling)
 
             # Run the MCMC with **kwargs from the user.
-            p0, ndim, vrot = self._get_p0(spectra, kern)
+            p0, ndim = self._get_p0(spectra, kern, nwalkers)
+            vkep = sc.G * self.mstar * 1.988e30 / radius / sc.au
+            vkep = np.sqrt(vkep) * np.sin(np.radians(self.inc))
             sampler = emcee.EnsembleSampler(nwalkers, ndim,
                                             log_probability,
-                                            args=(spectra, angles, vrot))
+                                            args=(spectra, angles, vkep))
             sampler.run_mcmc(p0, nburnin + nsteps)
 
             # Plot the sampling.
@@ -193,7 +200,6 @@ class linecube:
 
         p0:         Starting positions for the walkers.
         ndim:       Number of dimensions.
-        vrot:       Estimated rotation velocity [m/s].
         """
 
         # Estimate values from the spectra.
@@ -203,18 +209,20 @@ class linecube:
         # Best guesses for parameters.
         p0 = [vrot, 1.0, noise]
         if kern == 'SHO':
-            p0 += [3.0, -1.0, 5.0]
+            p0 += [12.0, -12.0, 5.0]
         elif kern == 'M32':
-            p0 += [-2.0, 7.0]
+            p0 += [2.0, 7.0]
         else:
             raise ValueError("Kern must be 'SHO' or 'M32'.")
-        ndim = len(p0)
+        p0 = np.squeeze(p0)
+        ndim = int(p0.size)
 
         # Include scatter and rescale the PA guess.
-        dp0 = np.random.randn(nwalkers * ndim).reshape((nwalkers, ndim))
+        dp0 = np.random.randn(int(nwalkers * ndim))
+        dp0 = dp0.reshape((int(nwalkers), int(ndim)))
         p0 = p0[None, :] * (1.0 + 3e-2 * dp0)
         p0[:, 1] -= 1.0
-        return p0, ndim, vrot
+        return p0, ndim
 
     def set_emission_surface_analytical(self, psi=None, z_0=None, z_q=1.0,
                                         r_0=None):
@@ -323,7 +331,7 @@ class linecube:
             return - np.inf
 
         # Deproject the model and make sure arrays are sorted.
-        x = self.velax[None, :] + vrot * np.cos(angles)[:, None]
+        x = self.velax[None, :] + vrot * np.cos(angles + posang)[:, None]
         if x.shape == spectra.shape:
             x = x.flatten()
         else:
@@ -380,7 +388,7 @@ class linecube:
             return -np.inf
 
         # Deproject the model and make sure arrays are sorted.
-        x = self.velax[None, :] + vrot * np.cos(angles)[:, None]
+        x = self.velax[None, :] + vrot * np.cos(angles + posang)[:, None]
         if x.shape == spectra.shape:
             x = x.flatten()
         else:
@@ -497,18 +505,11 @@ class linecube:
         vlsr = np.average([vmin, vmax])
         return np.average([vlsr - vmin, vmax - vlsr])
 
-    def _estimate_noise(self, spectrum):
+    def _estimate_noise(self, spectra, nchan=15):
         """Estimate the noise in the spectrum's end channels."""
-        Tb = spectrum.max()
-        x0 = self.velax[spectrum.argmax()]
-        dV = np.trapz(spectrum, self.velax) / Tb / np.sqrt(2. * np.pi)
-        try:
-            x0, dV, _ = curve_fit(gaussian, self.velax, spectrum,
-                                  maxfev=10000, p0=[x0, dV, Tb])[0]
-        except:
-            pass
-        noise = np.nanstd(spectrum[abs(self.velax - x0) > 3. * dV])
-        return noise if np.isfinite(noise) else np.nanstd(spectrum)
+        if spectra.shape[0] != self.velax.shape[0]:
+            spectra = spectra.T
+        return np.nanstd([spectra[:nchan], spectra[-nchan:]])
 
     def _estimate_width(self, spectra):
         """Estimate the Doppler width of the lines."""
@@ -541,7 +542,7 @@ class linecube:
         kern:       Name of the kernel.
         """
         nwalkers, nsamples, ndim = sampler.chain.shape
-        fig, axs = plt.subplots(ncols=ndim)
+        fig, axs = plt.subplots(ncols=ndim, figsize=(ndim*3.0, 2.0))
         for a, ax in enumerate(axs):
             for w in range(nwalkers):
                 ax.plot(sampler.chain[w, :, a], alpha=0.1)
