@@ -82,9 +82,11 @@ class linecube:
                                                       inc=self.inc,
                                                       pa=self.pa)
 
-        # Define the radial sampling in [au].
+        # Define the radial sampling in [au] and calculate Keplerian rotation.
         self.rmin, self.rmax, self.nbins = rmin, rmax, int(nbins)
         self.rpnts = np.linspace(self.rmin, self.rmax, self.nbins)
+        self.vkep = np.sqrt(sc.G * self.mstar * 1.988e30 / self.rpnts / sc.au)
+        self.vkep *= np.sin(np.radians(self.inc))
 
         # By default the disk is assumed to be geometrically thin.
         self.surface = interp1d(self.rpnts, np.zeros(self.nbins),
@@ -112,10 +114,7 @@ class linecube:
         nburnin:    Number of samples used for the burn-in of the MCMC.
         nsteps:     Number of samples used to calculate the posterior
                     distributions.
-        sampling:   Spatial sampling to be applied for selecting pixels. If
-                    None, will use try to use the beamsize of the attached
-                    cube. If all pixels are to be considered, use 0.0,
-                    otherwise any value will do.
+        sampling:   Spatial sampling to be applied for selecting pixels.
         kern:       Kernel to use for the correlation. Either the simple
                     harmonic oscillator, 'SHO', or the Mattern32 kernel, 'M32'.
                     More information can be found at the celerite website,
@@ -136,7 +135,7 @@ class linecube:
         if width is None:
             width = np.mean(np.diff(rpnts))
         if sampling is None:
-            sampling = self.cube.bmaj
+            sampling = 0.0
 
         # Check the kernel selection.
         if kern not in ['SHO', 'M32']:
@@ -148,19 +147,22 @@ class linecube:
 
         # Cycle through each radial point performing the fitting.
         pcnts = []
-        ndim = 6
         for r, radius in enumerate(rpnts):
 
             # Find the annulus.
             spectra, angles = self._get_annulus(radius, width, sampling)
 
             # Run the MCMC with **kwargs from the user.
-            p0, ndim = self._get_p0(spectra, kern, nwalkers)
-            vkep = sc.G * self.mstar * 1.988e30 / radius / sc.au
-            vkep = np.sqrt(vkep) * np.sin(np.radians(self.inc))
+            p0, ndim = self._get_p0(spectra, kern, nwalkers, self.vkep[r])
+
+            if len(spectra) == 0.0:
+                pcnts.append(np.zeros((ndim, 3)))
+                continue
+
             sampler = emcee.EnsembleSampler(nwalkers, ndim,
                                             log_probability,
-                                            args=(spectra, angles, vkep))
+                                            args=(spectra, angles,
+                                                  self.vkep[r]))
             sampler.run_mcmc(p0, nburnin + nsteps)
 
             # Plot the sampling.
@@ -184,7 +186,7 @@ class linecube:
         pcnts = np.rollaxis(np.squeeze(pcnts), 0, 3)
         return rpnts, pcnts[0], pcnts[1], pcnts[2:]
 
-    def _get_p0(self, spectra, kern, nwalkers):
+    def _get_p0(self, spectra, kern, nwalkers, vkep):
         """
         Return the starting positions for the MCMC. The default starting
         hyperparameters were found by testing multiple runs. With a sufficient
@@ -202,12 +204,9 @@ class linecube:
         ndim:       Number of dimensions.
         """
 
-        # Estimate values from the spectra.
-        vrot = self._estimate_vrot(spectra)
-        noise = np.nanmean([self._estimate_noise(s) for s in spectra])**2
-
         # Best guesses for parameters.
-        p0 = [vrot, 1.0, noise]
+        noise = np.nanmean([self._estimate_noise(s) for s in spectra])**2
+        p0 = [vkep, 1.0, noise]
         if kern == 'SHO':
             p0 += [12.0, -12.0, 5.0]
         elif kern == 'M32':
@@ -264,12 +263,13 @@ class linecube:
             r_0 = self.rmin
         z = z_0 * np.power(self.rpnts / r_0, z_q)
         self.surface = interp1d(self.rpnts, z, fill_value='extrapolate')
-        return
+        return z
 
     def set_emission_surface_data(self, nsigma=3, downsample=1, smooth=1):
         """
         Derive the emission surface profile following the method of Pinte et
         al. (2018) (https://ui.adsabs.harvard.edu/#abs/2017arXiv171006450P).
+        TODO: Find someway to include uncertainties on this.
 
         - Input -
 
@@ -287,10 +287,10 @@ class linecube:
                                     nsigma=nsigma, downsample=downsample)
             r, z, _ = cube.emission_surface(rmin=self.rmin, rmax=self.rmax,
                                             nbins=self.nbins)
-            z = z[1]
         if smooth > 1:
-            z = running_mean(z, smooth)
-        return interp1d(r, z, fill_value='extrapolate')
+            z = np.squeeze([running_mean(zz, smooth) for zz in z])
+        self.surface = interp1d(r, z[1], fill_value='extrapolate')
+        return z
 
     def _log_probability_SHO(self, theta, spectra, angles, vkep):
         """
@@ -317,7 +317,7 @@ class linecube:
         # Uninformative priors. The bounds for lnw0 are somewhat arbitrary and
         # testing has shown that it makes little difference to the result. It
         # is also highly correlated with lnQ which has a much broader prior.
-        if not 0.8 <= vrot / vkep <= 1.2:
+        if not 0.7 <= vrot / vkep <= 1.3:
             return -np.inf
         if abs(posang) > 0.2:
             return -np.inf
@@ -328,7 +328,7 @@ class linecube:
         if not -16. < lnQ < 0.:
             return -np.inf
         if not 4.0 <= lnw0 <= 6.0:
-            return - np.inf
+            return -np.inf
 
         # Deproject the model and make sure arrays are sorted.
         x = self.velax[None, :] + vrot * np.cos(angles + posang)[:, None]
