@@ -1,5 +1,6 @@
 """Simple class to deproject spectra and measure the rotation velocity."""
 
+import celerite
 import numpy as np
 from scipy.stats import binned_statistic
 from scipy.optimize import curve_fit
@@ -8,8 +9,13 @@ from scipy.optimize import minimize_scalar
 
 class ensemble:
 
-    def __init__(self, spectra, theta, velax):
+    def __init__(self, spectra, theta, velax, suppress_warnings=True):
         """Initialize the class."""
+
+        # Suppres warnings.
+        if suppress_warnings:
+            import warnings
+            warnings.filterwarnings("ignore")
 
         # Disk polar angles.
         self.theta = theta
@@ -24,10 +30,128 @@ class ensemble:
         self.channel = np.diff(velax)[0]
         self.velax_range = (self.velax[0] - 0.5 * self.channel,
                             self.velax[-1] + 0.5 * self.channel)
+        self.velax_mask = np.percentile(self.velax, [30, 70])
+
+    # -- Rotation Velocity by Gaussian Process Modelling -- #
+
+    def lnprior(self, theta, vref):
+        """Uninformative log-prior function for MCMC."""
+        vrot, noise, lnsigma, lnrho = theta
+        if abs(vrot - vref) / vref > 0.3:
+            return -np.inf
+        if noise <= 0.0:
+            return -np.inf
+        if not -5.0 < lnsigma < 10.:
+            return -np.inf
+        if not 0.0 <= lnrho <= 10.:
+            return -np.inf
+        return 0.0
+
+    def lnlikelihood(self, theta, resample=False):
+        """Log-likelihood function for the MCMC."""
+
+        # Unpack the free parameters.
+
+        vrot, noise, lnsigma, lnrho = theta
+
+        # Deproject the data and resample if requested.
+
+        if resample:
+            x, y = self.deprojected_spectrum(vrot)
+        else:
+            x, y = self.deprojected_spectra(vrot)
+
+        # Remove pesky points. This is not necessary but speeds it up
+        # and is useful to remove regions where there is a low
+        # sampling of points.
+
+        mask = np.logical_and(x > self.velax_mask[0], x < self.velax_mask[1])
+        x, y = x[mask], y[mask]
+
+        # Build the GP model.
+
+        k_noise = celerite.terms.JitterTerm(log_sigma=np.log(noise))
+        k_line = celerite.terms.Matern32Term(log_sigma=lnsigma, log_rho=lnrho)
+        gp = celerite.GP(k_noise + k_line, mean=np.nanmean(y), fit_mean=True)
+
+        # Calculate and the log-likelihood.
+
+        try:
+            gp.compute(x)
+        except:
+            return -np.inf
+        ll = gp.log_likelihood(y, quiet=True)
+        return ll if np.isfinite(ll) else -np.inf
+
+    def lnprobability(self, theta, vref, resample=False):
+        """Log-probability function for the MCMC."""
+        if ~np.isfinite(self.lnprior(theta, vref)):
+            return -np.inf
+        return self.lnlikelihood(theta, resample)
+
+    def get_vrot_GP(self, vref=None, resample=False, nwalkers=16, nburnin=300,
+                    nsteps=300, scatter=1e-2, plot_walkers=False,
+                    plot_corner=False, return_all=False):
+        """Get rotation velocity by modelling deprojected spectrum as a GP."""
+        import emcee
+        if resample:
+            print("WARNING: Resampling with the GP method is not advised.")
+        vref = self.guess_parameters(fit=True)[0] if vref is None else vref
+
+        # Set up emcee.
+        p0 = self.get_p0_GP(vref, nwalkers, scatter)
+        sampler = emcee.EnsembleSampler(nwalkers, 4, self.lnprobability,
+                                        args=(vref, resample))
+
+        # Run the sampler.
+        sampler.run_mcmc(p0, nburnin + nsteps)
+        samples = sampler.chain[:, -nsteps:]
+        samples = samples.reshape(-1, samples.shape[-1])
+
+        # Diagnosis plots if appropriate.
+        if plot_walkers:
+            self._plot_walkers(sampler, nburnin)
+        if plot_corner:
+            self._plot_corner(samples)
+
+        # Return the perncetiles.
+        percentiles = np.percentile(samples, [16, 50, 84], axis=0)
+        if return_all:
+            return percentiles
+        return percentiles[0]
+
+    def get_p0_GP(self, vref, nwalkers, scatter):
+        """Estimate (vrot, noise, lnp, lns) for the spectrum."""
+        p0 = np.array([vref, np.std(self.spectra[:, :10]),
+                       np.log(np.std(self.spectra)), np.log(150.)])
+        dp0 = np.random.randn(nwalkers * len(p0)).reshape(nwalkers, len(p0))
+        dp0 = np.where(p0 == 0.0, 1.0, p0)[None, :] * (1.0 + scatter * dp0)
+        return np.where(p0[None, :] == 0.0, dp0 - 1.0, dp0)
+
+    def _plot_corner(self, samples):
+        """Plot the corner plot for the MCMC."""
+        import corner
+        labels = [r'${\rm v_{rot}}$', r'${\rm \sigma_{rms}}$',
+                  r'${\rm ln(\sigma)}$', r'${\rm ln(\rho)}$']
+        corner.corner(samples, labels=labels, quantiles=[0.34, 0.5, 0.86],
+                      show_titles=True)
+
+    def _plot_walkers(self, sampler, nburnin):
+        """Plot the walkers from the MCMC."""
+        import matplotlib.pyplot as plt
+        labels = [r'${\rm v_{rot}}$', r'${\rm \sigma_{rms}}$',
+                  r'${\rm ln(\sigma)}$', r'${\rm ln(\rho)}$']
+        for s, sample in enumerate(sampler.chain.T):
+            fig, ax = plt.subplots()
+            for walker in sample.T:
+                ax.plot(walker, alpha=0.1)
+            ax.set_xlabel('Steps')
+            ax.set_ylabel(labels[s])
+            ax.axvline(nburnin, ls=':', color='k')
 
     # -- Rotation Velocity by Minimizing Linewidth -- #
 
-    def get_p0(self, velax, spectrum):
+    def get_p0_dV(self, velax, spectrum):
         """Estimate (x0, dV, Tb) for the spectrum."""
         Tb = np.max(spectrum)
         x0 = velax[spectrum.argmax()]
@@ -38,7 +162,7 @@ class ensemble:
         """Return the absolute width of a Gaussian fit to the spectrum."""
         try:
             dV = curve_fit(self.gaussian, self.velax, spectrum,
-                           p0=self.get_p0(self.velax, spectrum),
+                           p0=self.get_p0_dV(self.velax, spectrum),
                            maxfev=100000)[0][1]
             return abs(dV)
         except:
