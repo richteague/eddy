@@ -12,7 +12,7 @@ class ensemble:
     def __init__(self, spectra, theta, velax, suppress_warnings=True):
         """Initialize the class."""
 
-        # Suppres warnings.
+        # Suppress warnings.
         if suppress_warnings:
             import warnings
             warnings.filterwarnings("ignore")
@@ -128,27 +128,6 @@ class ensemble:
         dp0 = np.where(p0 == 0.0, 1.0, p0)[None, :] * (1.0 + scatter * dp0)
         return np.where(p0[None, :] == 0.0, dp0 - 1.0, dp0)
 
-    def _plot_corner(self, samples):
-        """Plot the corner plot for the MCMC."""
-        import corner
-        labels = [r'${\rm v_{rot}}$', r'${\rm \sigma_{rms}}$',
-                  r'${\rm ln(\sigma)}$', r'${\rm ln(\rho)}$']
-        corner.corner(samples, labels=labels, quantiles=[0.34, 0.5, 0.86],
-                      show_titles=True)
-
-    def _plot_walkers(self, sampler, nburnin):
-        """Plot the walkers from the MCMC."""
-        import matplotlib.pyplot as plt
-        labels = [r'${\rm v_{rot}}$', r'${\rm \sigma_{rms}}$',
-                  r'${\rm ln(\sigma)}$', r'${\rm ln(\rho)}$']
-        for s, sample in enumerate(sampler.chain.T):
-            fig, ax = plt.subplots()
-            for walker in sample.T:
-                ax.plot(walker, alpha=0.1)
-            ax.set_xlabel('Steps')
-            ax.set_ylabel(labels[s])
-            ax.axvline(nburnin, ls=':', color='k')
-
     # -- Rotation Velocity by Minimizing Linewidth -- #
 
     def get_p0_dV(self, velax, spectrum):
@@ -230,3 +209,38 @@ class ensemble:
                              p0=[vrot, vlsr], maxfev=10000)[0]
         except:
             return vrot, vlsr
+
+    # - Plotting Functions - #
+
+    def plot_spectra(self, ax=None):
+        """Plot all the spectra."""
+        import matplotlib.pyplot as plt
+        if ax is None:
+            fig, ax = plt.subplots()
+        for spectrum in self.spectra:
+            ax.step(self.velax, spectrum, where='mid', color='k')
+        ax.set_xlabel('Velocity')
+        ax.set_ylabel('Intensity')
+        ax.set_xlim(self.velax[0], self.velax[-1])
+        return ax
+
+    def _plot_corner(self, samples):
+        """Plot the corner plot for the MCMC."""
+        import corner
+        labels = [r'${\rm v_{rot}}$', r'${\rm \sigma_{rms}}$',
+                  r'${\rm ln(\sigma)}$', r'${\rm ln(\rho)}$']
+        corner.corner(samples, labels=labels, quantiles=[0.34, 0.5, 0.86],
+                      show_titles=True)
+
+    def _plot_walkers(self, sampler, nburnin):
+        """Plot the walkers from the MCMC."""
+        import matplotlib.pyplot as plt
+        labels = [r'${\rm v_{rot}}$', r'${\rm \sigma_{rms}}$',
+                  r'${\rm ln(\sigma)}$', r'${\rm ln(\rho)}$']
+        for s, sample in enumerate(sampler.chain.T):
+            fig, ax = plt.subplots()
+            for walker in sample.T:
+                ax.plot(walker, alpha=0.1)
+            ax.set_xlabel('Steps')
+            ax.set_ylabel(labels[s])
+            ax.axvline(nburnin, ls=':', color='k')
