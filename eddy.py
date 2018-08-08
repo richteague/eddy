@@ -34,6 +34,45 @@ class ensemble:
 
     # -- Rotation Velocity by Gaussian Process Modelling -- #
 
+    def get_vrot_GP(self, vref=None, resample=False, nwalkers=16, nburnin=300,
+                    nsteps=300, scatter=1e-2, plot_walkers=False,
+                    plot_corner=False, return_all=False):
+        """Get rotation velocity by modelling deprojected spectrum as a GP."""
+        import emcee
+        if resample:
+            print("WARNING: Resampling with the GP method is not advised.")
+        vref = self.guess_parameters(fit=True)[0] if vref is None else vref
+
+        # Set up emcee.
+        p0 = self._get_p0_GP(vref, nwalkers, scatter)
+        sampler = emcee.EnsembleSampler(nwalkers, 4, self._lnprobability,
+                                        args=(vref, resample))
+
+        # Run the sampler.
+        sampler.run_mcmc(p0, nburnin + nsteps)
+        samples = sampler.chain[:, -nsteps:]
+        samples = samples.reshape(-1, samples.shape[-1])
+
+        # Diagnosis plots if appropriate.
+        if plot_walkers:
+            self._plot_walkers(sampler, nburnin)
+        if plot_corner:
+            self._plot_corner(samples)
+
+        # Return the perncetiles.
+        percentiles = np.percentile(samples, [16, 50, 84], axis=0)
+        if return_all:
+            return percentiles
+        return percentiles[:, 0]
+
+    def _get_p0_GP(self, vref, nwalkers, scatter):
+        """Estimate (vrot, noise, lnp, lns) for the spectrum."""
+        p0 = np.array([vref, np.std(self.spectra[:, :10]),
+                       np.log(np.std(self.spectra)), np.log(150.)])
+        dp0 = np.random.randn(nwalkers * len(p0)).reshape(nwalkers, len(p0))
+        dp0 = np.where(p0 == 0.0, 1.0, p0)[None, :] * (1.0 + scatter * dp0)
+        return np.where(p0[None, :] == 0.0, dp0 - 1.0, dp0)
+
     def _lnprior(self, theta, vref):
         """Uninformative log-prior function for MCMC."""
         vrot, noise, lnsigma, lnrho = theta
@@ -89,45 +128,6 @@ class ensemble:
             return -np.inf
         return self._lnlikelihood(theta, resample)
 
-    def get_vrot_GP(self, vref=None, resample=False, nwalkers=16, nburnin=300,
-                    nsteps=300, scatter=1e-2, plot_walkers=False,
-                    plot_corner=False, return_all=False):
-        """Get rotation velocity by modelling deprojected spectrum as a GP."""
-        import emcee
-        if resample:
-            print("WARNING: Resampling with the GP method is not advised.")
-        vref = self.guess_parameters(fit=True)[0] if vref is None else vref
-
-        # Set up emcee.
-        p0 = self._get_p0_GP(vref, nwalkers, scatter)
-        sampler = emcee.EnsembleSampler(nwalkers, 4, self._lnprobability,
-                                        args=(vref, resample))
-
-        # Run the sampler.
-        sampler.run_mcmc(p0, nburnin + nsteps)
-        samples = sampler.chain[:, -nsteps:]
-        samples = samples.reshape(-1, samples.shape[-1])
-
-        # Diagnosis plots if appropriate.
-        if plot_walkers:
-            self._plot_walkers(sampler, nburnin)
-        if plot_corner:
-            self._plot_corner(samples)
-
-        # Return the perncetiles.
-        percentiles = np.percentile(samples, [16, 50, 84], axis=0)
-        if return_all:
-            return percentiles
-        return percentiles[:, 0]
-
-    def _get_p0_GP(self, vref, nwalkers, scatter):
-        """Estimate (vrot, noise, lnp, lns) for the spectrum."""
-        p0 = np.array([vref, np.std(self.spectra[:, :10]),
-                       np.log(np.std(self.spectra)), np.log(150.)])
-        dp0 = np.random.randn(nwalkers * len(p0)).reshape(nwalkers, len(p0))
-        dp0 = np.where(p0 == 0.0, 1.0, p0)[None, :] * (1.0 + scatter * dp0)
-        return np.where(p0[None, :] == 0.0, dp0 - 1.0, dp0)
-
     # -- Rotation Velocity by Minimizing Linewidth -- #
 
     def _get_p0_dV(self, velax, spectrum):
@@ -140,7 +140,7 @@ class ensemble:
     def _get_gaussian_width(self, spectrum, fill_value=1e50):
         """Return the absolute width of a Gaussian fit to the spectrum."""
         try:
-            dV = curve_fit(self.gaussian, self.velax, spectrum,
+            dV = curve_fit(self._gaussian, self.velax, spectrum,
                            p0=self._get_p0_dV(self.velax, spectrum),
                            maxfev=100000)[0][1]
             return abs(dV)
@@ -156,10 +156,10 @@ class ensemble:
             y = y[np.logical_and(x >= self.velax[0], x <= self.velax[-1])]
         return self._get_gaussian_width(y)
 
-    def get_vrot_dV(self, guess=None, resample=True):
+    def get_vrot_dV(self, vref=None, resample=True):
         """Get the rotation velocity by minimizing the linewidth."""
-        guess = self.guess_parameters(fit=True)[0] if guess is None else guess
-        bounds = np.array([0.7, 1.3]) * guess
+        vref = self.guess_parameters(fit=True)[0] if vref is None else vref
+        bounds = np.array([0.7, 1.3]) * vref
         return minimize_scalar(self._get_deprojected_width, method='bounded',
                                bounds=bounds, args=(resample)).x
 
@@ -205,7 +205,7 @@ class ensemble:
         if not fit:
             return vrot, vlsr
         try:
-            return curve_fit(self.SHO, self.theta, vpeaks,
+            return curve_fit(self._SHO, self.theta, vpeaks,
                              p0=[vrot, vlsr], maxfev=10000)[0]
         except:
             return vrot, vlsr
@@ -240,7 +240,7 @@ class ensemble:
         for s, sample in enumerate(sampler.chain.T):
             fig, ax = plt.subplots()
             for walker in sample.T:
-                ax.plot(walker, alpha=0.1)
+                ax.plot(walker, alpha=0.1, color='k')
             ax.set_xlabel('Steps')
             ax.set_ylabel(labels[s])
             ax.axvline(nburnin, ls=':', color='k')

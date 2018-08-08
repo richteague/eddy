@@ -6,7 +6,7 @@ from eddy import ensemble
 
 def gaussian_ensemble(vrot, Tb=40., dV=350., tau=None, rms=1., dV_chan=30.,
                       N=10, PAmin=-np.pi, PAmax=np.pi, linear_sample=True,
-                      plot=False):
+                      plot=True):
     """
     Model an ensemble of optically thick or thin Gaussian line profiles.
 
@@ -72,7 +72,7 @@ def flared_disk_ensemble(radius=1.0, inc=30., mstar=1.0, dist=100., Tb=40.,
                          Tb2=21., dV=350., dV2=110., rms=1., dV_chan=30., N=10,
                          PAmin=-np.pi, PAmax=np.pi, linear_sample=True,
                          aspect_ratio=0.3, flaring_angle=1.25, distance=100.,
-                         plot=False):
+                         plot=True):
     """
     Create an ensemble of Gaussian lines with contamination from the far side
     of a flared disk (see Rosenfeld et al. 2013 for examples). Unlike
