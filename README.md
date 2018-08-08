@@ -12,10 +12,19 @@ Notebooks can be downloaded and run locally so to play with the variables.
 ## Functions
 
 `eddy.py` contains an `ensemble` class which has all the functionality described
-in the Python Notebook. This should be relatively easy to use,
+in the Python Notebook. This should be relatively easy to use, for example to
+use the method by minimizing the width of the stacked line profile:
 
 ```python
 from eddy import ensemble
 annulus = ensemble(spectra=spectra, theta=theta, velax=velax)
 vrot = annulus.get_vrot_dV()
 ```
+
+or for the Gaussian Process approach:
+
+```python
+vrot = annulus.get_vrot_GP()
+```
+
+There are also functions

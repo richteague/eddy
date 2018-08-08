@@ -34,7 +34,7 @@ class ensemble:
 
     # -- Rotation Velocity by Gaussian Process Modelling -- #
 
-    def lnprior(self, theta, vref):
+    def _lnprior(self, theta, vref):
         """Uninformative log-prior function for MCMC."""
         vrot, noise, lnsigma, lnrho = theta
         if abs(vrot - vref) / vref > 0.3:
@@ -47,7 +47,7 @@ class ensemble:
             return -np.inf
         return 0.0
 
-    def lnlikelihood(self, theta, resample=False):
+    def _lnlikelihood(self, theta, resample=False):
         """Log-likelihood function for the MCMC."""
 
         # Unpack the free parameters.
@@ -83,11 +83,11 @@ class ensemble:
         ll = gp.log_likelihood(y, quiet=True)
         return ll if np.isfinite(ll) else -np.inf
 
-    def lnprobability(self, theta, vref, resample=False):
+    def _lnprobability(self, theta, vref, resample=False):
         """Log-probability function for the MCMC."""
-        if ~np.isfinite(self.lnprior(theta, vref)):
+        if ~np.isfinite(self._lnprior(theta, vref)):
             return -np.inf
-        return self.lnlikelihood(theta, resample)
+        return self._lnlikelihood(theta, resample)
 
     def get_vrot_GP(self, vref=None, resample=False, nwalkers=16, nburnin=300,
                     nsteps=300, scatter=1e-2, plot_walkers=False,
@@ -99,8 +99,8 @@ class ensemble:
         vref = self.guess_parameters(fit=True)[0] if vref is None else vref
 
         # Set up emcee.
-        p0 = self.get_p0_GP(vref, nwalkers, scatter)
-        sampler = emcee.EnsembleSampler(nwalkers, 4, self.lnprobability,
+        p0 = self._get_p0_GP(vref, nwalkers, scatter)
+        sampler = emcee.EnsembleSampler(nwalkers, 4, self._lnprobability,
                                         args=(vref, resample))
 
         # Run the sampler.
@@ -118,9 +118,9 @@ class ensemble:
         percentiles = np.percentile(samples, [16, 50, 84], axis=0)
         if return_all:
             return percentiles
-        return percentiles[0]
+        return percentiles[:, 0]
 
-    def get_p0_GP(self, vref, nwalkers, scatter):
+    def _get_p0_GP(self, vref, nwalkers, scatter):
         """Estimate (vrot, noise, lnp, lns) for the spectrum."""
         p0 = np.array([vref, np.std(self.spectra[:, :10]),
                        np.log(np.std(self.spectra)), np.log(150.)])
@@ -130,52 +130,52 @@ class ensemble:
 
     # -- Rotation Velocity by Minimizing Linewidth -- #
 
-    def get_p0_dV(self, velax, spectrum):
+    def _get_p0_dV(self, velax, spectrum):
         """Estimate (x0, dV, Tb) for the spectrum."""
         Tb = np.max(spectrum)
         x0 = velax[spectrum.argmax()]
         dV = np.trapz(spectrum, velax) / Tb / np.sqrt(2. * np.pi)
         return x0, dV, Tb
 
-    def get_gaussian_width(self, spectrum, fill_value=1e50):
+    def _get_gaussian_width(self, spectrum, fill_value=1e50):
         """Return the absolute width of a Gaussian fit to the spectrum."""
         try:
             dV = curve_fit(self.gaussian, self.velax, spectrum,
-                           p0=self.get_p0_dV(self.velax, spectrum),
+                           p0=self._get_p0_dV(self.velax, spectrum),
                            maxfev=100000)[0][1]
             return abs(dV)
         except:
             return fill_value
 
-    def get_deprojected_width(self, vrot, resample=True):
+    def _get_deprojected_width(self, vrot, resample=True):
         """Return the spectrum from a Gaussian fit."""
         if resample:
             x, y = self.deprojected_spectrum(vrot)
         else:
             x, y = self.deprojected_spectra(vrot, sort=True)
             y = y[np.logical_and(x >= self.velax[0], x <= self.velax[-1])]
-        return self.get_gaussian_width(y)
+        return self._get_gaussian_width(y)
 
     def get_vrot_dV(self, guess=None, resample=True):
         """Get the rotation velocity by minimizing the linewidth."""
         guess = self.guess_parameters(fit=True)[0] if guess is None else guess
         bounds = np.array([0.7, 1.3]) * guess
-        return minimize_scalar(self.get_deprojected_width, method='bounded',
+        return minimize_scalar(self._get_deprojected_width, method='bounded',
                                bounds=bounds, args=(resample)).x
 
     # -- Line Profile Functions -- #
 
-    def gaussian(self, x, x0, dV, Tb):
+    def _gaussian(self, x, x0, dV, Tb):
         """Gaussian function."""
         return Tb * np.exp(-np.power((x - x0) / dV, 2.0))
 
-    def thickline(self, x, x0, dV, Tex, tau):
+    def _thickline(self, x, x0, dV, Tex, tau):
         """Optically thick line profile."""
         if tau <= 0.0:
             raise ValueError("Must have positive tau.")
         return Tex * (1. - np.exp(-self.gaussian(x, x0, dV, tau)))
 
-    def SHO(self, x, A, y0):
+    def _SHO(self, x, A, y0):
         """Simple harmonic oscillator."""
         return A * np.cos(x) + y0
 
