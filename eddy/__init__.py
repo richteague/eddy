@@ -1,5 +1,5 @@
 from .eddy import ensemble
-from .modeling import gaussian_ensemble, flared_disk_ensemble
+from .modelling import gaussian_ensemble, flared_disk_ensemble
 
 __all__ = [
     'ensemble',
