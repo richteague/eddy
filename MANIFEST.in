@@ -1,0 +1,3 @@
+include Examples/Images/*.png
+include Examples/*.ipynb
+include README.md

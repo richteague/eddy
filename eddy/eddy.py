@@ -117,7 +117,7 @@ class ensemble:
 
         try:
             gp.compute(x)
-        except:
+        except Exception:
             return -np.inf
         ll = gp.log_likelihood(y, quiet=True)
         return ll if np.isfinite(ll) else -np.inf
@@ -144,7 +144,7 @@ class ensemble:
                            p0=self._get_p0_dV(self.velax, spectrum),
                            maxfev=100000)[0][1]
             return abs(dV)
-        except:
+        except Exception:
             return fill_value
 
     def _get_deprojected_width(self, vrot, resample=True):
@@ -207,7 +207,7 @@ class ensemble:
         try:
             return curve_fit(self._SHO, self.theta, vpeaks,
                              p0=[vrot, vlsr], maxfev=10000)[0]
-        except:
+        except Exception:
             return vrot, vlsr
 
     # - Plotting Functions - #

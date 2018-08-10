@@ -1,7 +1,7 @@
 """Functions to easily build example spectra to test the approach."""
 
 import numpy as np
-from eddy import ensemble
+from .eddy import ensemble
 
 
 def gaussian_ensemble(vrot, Tb=40., dV=350., tau=None, rms=1., dV_chan=30.,
@@ -45,7 +45,7 @@ def gaussian_ensemble(vrot, Tb=40., dV=350., tau=None, rms=1., dV_chan=30.,
     if PAmin >= PAmax:
         raise ValueError("PAmin must be smaller than PAmax.")
     if linear_sample:
-        theta = np.linspace(PAmin, PAmax, N+1)[1:]
+        theta = np.linspace(PAmin, PAmax, N + 1)[1:]
         theta += np.diff(theta)[-1] * np.random.random()
     else:
         theta = (PAmax - PAmin) * np.random.random(N) - PAmin
@@ -125,7 +125,7 @@ def flared_disk_ensemble(radius=1.0, inc=30., mstar=1.0, dist=100., Tb=40.,
     if PAmin >= PAmax:
         raise ValueError("Must have PA_min < PA_max.")
     if linear_sample:
-        tdisk = np.linspace(PAmin, PAmax, N+1)[1:]
+        tdisk = np.linspace(PAmin, PAmax, N + 1)[1:]
         tdisk += np.diff(tdisk)[-1] * np.random.random()
     else:
         tdisk = 2. * np.pi * np.random.random(N) - np.pi
@@ -194,7 +194,7 @@ def flared_disk_ensemble(radius=1.0, inc=30., mstar=1.0, dist=100., Tb=40.,
 
 def _gaussian(x, x0, dx, A):
     """Simple Gaussian function."""
-    return A * np.exp(-np.power((x-x0)/dx, 2))
+    return A * np.exp(-np.power((x - x0) / dx, 2))
 
 
 def _thick_line(x, x0, dx, Tex, tau):
