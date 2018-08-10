@@ -187,7 +187,7 @@ class ensemble:
         vpnts = vpnts.flatten()
         if not sort:
             return vpnts, self.spectra_flat
-        return np.squeeze(zip(*sorted(zip(vpnts, self.spectra_flat))))
+        return np.squeeze(zip(*sorted(list(zip(vpnts, self.spectra_flat)))))
 
     def deprojected_spectrum(self, vrot):
         """Returns (x, y) of deprojected and binned spectrum."""
