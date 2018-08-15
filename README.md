@@ -2,6 +2,16 @@
 
 Python tools to recover precise rotation profiles of disks. These methods were initially published in [Teague et al. (2018)](https://ui.adsabs.harvard.edu/#abs/2018ApJ...860L..12T) and Teague et al. (in prep.). The idea is that by using all the spectra in an annulus we can gain a significant advantage in determining the line center and thus the line-of-sight velocity for the line.
 
+# Installation
+
+After cloning the repository, `cd` into the directory with `setup.py` and enter in the shell prompt
+
+```
+pip install .
+```
+
+which should install `eddy` and all necessary additions.
+
 ## Usage
 
 A more thorough description of the functions available and how they work can be found in the Jupyter Notebooks in the Examples folder. In brief, `eddy` contains an `ensemble` class which takes an array of spectra extracted from an annulus of constant radius, the polar coordinates of where the spectra were taken from (where `theta = 0` is the red-shifted major axis), and the velocity axis.

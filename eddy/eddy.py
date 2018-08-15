@@ -211,7 +211,7 @@ class ensemble:
         except Exception:
             return vrot, vlsr
 
-    # - Plotting Functions - #
+    # -- Plotting Functions -- #
 
     def plot_spectra(self, ax=None):
         """Plot all the spectra."""
@@ -230,7 +230,7 @@ class ensemble:
         import corner
         labels = [r'${\rm v_{rot}}$', r'${\rm \sigma_{rms}}$',
                   r'${\rm ln(\sigma)}$', r'${\rm ln(\rho)}$']
-        corner.corner(samples, labels=labels, quantiles=[0.34, 0.5, 0.86],
+        corner.corner(samples, labels=labels, quantiles=[0.16, 0.5, 0.84],
                       show_titles=True)
 
     def _plot_walkers(self, sampler, nburnin):
