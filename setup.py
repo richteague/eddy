@@ -4,17 +4,25 @@ Setup file for package `eddy`.
 from setuptools import find_packages, setup
 import os
 
-setup(name='eddy',
-      description='eddy - recover precise rotation profiles of disks. Methods initially published in Teague et al. (2018).',
-      long_description_content_type='text/markdown',
-      long_description=open(os.path.join(
-          os.path.dirname(__file__), 'README.md')).read(),
-      url='https://github.com/richteague/eddy',
-      author='Rich Teague',
-      author_email='rteague@umich.edu',
-      license='????',
-      packages=find_packages(),
-      include_package_data=True,
-      install_requires=['scipy', 'numpy', 'matplotlib', 'celerite'],
-      zip_safe=False
-      )
+
+this_directory = os.path.abspath(os.path.dirname(__file__))
+with open(os.path.join(this_directory, "README.md")) as f:
+    long_description = f.read()
+
+setup(
+    name="eddy",
+    version="0.0.1",
+    author="Richard Teague",
+    author_email="rteague@umich.edu",
+    py_modules=["eddy"],
+    description=("Tools to recover expectionally precise rotation curves from "
+                 "spatially resolved spectra."),
+    long_description_content_type="text/markdown",
+    long_description=long_description,
+    url="https://github.com/richteague/eddy",
+    license="MIT",
+    packages=find_packages(),
+    include_package_data=True,
+    install_requires=['scipy', 'numpy', 'matplotlib', 'celerite'],
+    zip_safe=False
+)
