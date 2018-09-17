@@ -37,16 +37,53 @@ class ensemble(object):
 
     # -- Rotation Velocity by Gaussian Process Modelling -- #
 
-    def get_vrot_GP(self, vref=None, p0=None, resample=False, nwalkers=64,
-                    nburnin=300, nsteps=50, scatter=1e-3, plot_walkers=False,
-                    plot_corner=False, return_all=False, optimize=True,
+    def get_vrot_GP(self, vref=None, p0=None, resample=False, optimize=True,
+                    nwalkers=64, nburnin=300, nsteps=300, scatter=1e-3,
+                    plot_walkers=True, plot_corner=True, return_all=False,
                     **kwargs):
-        """Get rotation velocity by modelling deprojected spectrum as a GP."""
+        """Infer the rotation velocity of the annulus by finding the velocity
+        which after deprojecting the spectra to a common velocity produces the
+        smoothest spectrum.
+
+        Args:
+            vref (Optional[float]): Predicted rotation velocity, typically the
+                Keplerian velocity at that radius. Will be used as bounds for
+                searching for the true velocity, set as +\- 30%.
+            p0 (Optional[list]): Initial parameters for the minimization. Will
+                override any guess for vref.
+            resample (Optional[bool]): Resample the shifted spectra down to the
+                original velocity resolution. Not recommended.
+            optimize (Optional[bool]): Optimize the starting positions before
+                the MCMC runs.
+            nwalkers (Optional[int]): Number of walkers used for the MCMC runs.
+            nburnin (Optional[int]): Number of steps used to burn in walkers.
+            nsteps (Optional[int]): Number of steps taken to sample posteriors.
+            scatter (Optional[float]): Scatter applied to the starting
+                positions before running the MCMC.
+            plot_walkers (Optional[bool]): Plot the trace of the walkers.
+            plot_corner (Optional[bool]): Plot the covariances of the
+                posteriors using corner.py.
+            return_all (Optional[bool]): If True, return the percentiles of the
+                posterior distributions for all parameters, otherwise just the
+                percentiles for the rotation velocity.
+            **kwargs (Optional[dict]): Additional kwargs to pass to minimize.
+
+        Returns:
+            percentiles (ndarray): The 16th, 50th and 84th percentiles of the
+                posterior distribution for all four parameters if return_all is
+                True otherwise just for the rotation velocity.
+
+        """
+
+        # Import emcee for the MCMC.
         import emcee
         if resample:
             print("WARNING: Resampling with the GP method is not advised.")
 
         # Initialize the starting positions.
+        if vref is not None and p0 is not None:
+            print("WARNING: Initial value of p0 (%.2f) " % (p0[0]) +
+                  "used in place of vref (%.2f)." % (vref))
         p0 = self._guess_parameters_GP(vref) if p0 is None else p0
         if len(p0) != 4:
             raise ValueError('Incorrect length of p0.')
@@ -54,7 +91,7 @@ class ensemble(object):
 
         # Optimize if necessary.
         if optimize:
-            p0 = self._optimize_p0(p0, **kwargs)
+            p0 = self._optimize_p0(p0, resample=resample, **kwargs)
         p0 = ensemble._randomize_p0(p0, nwalkers, scatter)
 
         # Set up emcee.
@@ -86,7 +123,9 @@ class ensemble(object):
                        args=(resample), **kwargs)
         if not res.success:
             print("WARNING: scipy.optimize.minimze did not converge.")
-        return res.x
+        else:
+            p0 = res.x
+        return p0
 
     def _guess_parameters_GP(self, vref, fit=True):
         """Guess the starting positions from the spectra."""
@@ -167,7 +206,21 @@ class ensemble(object):
     # -- Rotation Velocity by Minimizing Linewidth -- #
 
     def get_vrot_dV(self, vref=None, resample=False):
-        """Get the rotation velocity by minimizing the linewidth."""
+        """Infer the rotation velocity by finding the rotation velocity which,
+        after shifting all spectra to a common velocity, results in the
+        narrowest stacked profile.
+
+        Args:
+            vref (Optional[float]): Predicted rotation velocity, typically the
+                Keplerian velocity at that radius. Will be used as the starting
+                position for the minimization.
+            resample (Optional[bool]): Resample the shifted spectra down to the
+                original velocity resolution. Not recommended.
+
+        Returns:
+            vrot (float): Rotation velocity which minimizes the width.
+
+        """
         vref = self.guess_parameters(fit=True)[0] if vref is None else vref
         bounds = np.array([0.7, 1.3]) * vref
         res = minimize_scalar(self.get_deprojected_width, method='bounded',

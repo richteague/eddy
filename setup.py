@@ -23,6 +23,6 @@ setup(
     license="MIT",
     packages=find_packages(),
     include_package_data=True,
-    install_requires=['scipy', 'numpy', 'matplotlib', 'celerite'],
+    install_requires=['scipy', 'numpy', 'matplotlib', 'celerite', 'emcee'],
     zip_safe=False
 )
