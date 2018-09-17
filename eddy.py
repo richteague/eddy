@@ -7,7 +7,7 @@ from scipy.optimize import curve_fit
 from scipy.optimize import minimize_scalar
 
 
-class ensemble:
+class ensemble(object):
 
     def __init__(self, spectra, theta, velax, suppress_warnings=True,
                  remove_empty=True):
@@ -55,7 +55,7 @@ class ensemble:
         # Optimize if necessary.
         if optimize:
             p0 = self._optimize_p0(p0, **kwargs)
-        p0 = self._randomize_p0(p0, nwalkers, scatter)
+        p0 = ensemble._randomize_p0(p0, nwalkers, scatter)
 
         # Set up emcee.
         sampler = emcee.EnsembleSampler(nwalkers, 4, self._lnprobability,
@@ -68,9 +68,9 @@ class ensemble:
 
         # Diagnosis plots if appropriate.
         if plot_walkers:
-            self._plot_walkers(sampler, nburnin)
+            ensemble._plot_walkers(sampler, nburnin)
         if plot_corner:
-            self._plot_corner(samples)
+            ensemble._plot_corner(samples)
 
         # Return the perncetiles.
         percentiles = np.percentile(samples, [16, 50, 84], axis=0)
@@ -82,7 +82,6 @@ class ensemble:
         """Optimize the starting positions."""
         from scipy.optimize import minimize
         kwargs['method'] = kwargs.get('method', 'L-BFGS-B')
-        print kwargs
         res = minimize(self._negative_lnlikelihood, x0=p0,
                        args=(resample), **kwargs)
         if not res.success:
@@ -97,31 +96,20 @@ class ensemble:
         ln_rho = np.log(150.)
         return np.array([vref, noise, ln_sig, ln_rho])
 
-    def _randomize_p0(self, p0, nwalkers, scatter):
+    @staticmethod
+    def _randomize_p0(p0, nwalkers, scatter):
         """Estimate (vrot, noise, lnp, lns) for the spectrum."""
         dp0 = np.random.randn(nwalkers * len(p0)).reshape(nwalkers, len(p0))
         dp0 = np.where(p0 == 0.0, 1.0, p0)[None, :] * (1.0 + scatter * dp0)
         return np.where(p0[None, :] == 0.0, dp0 - 1.0, dp0)
-
-    def _lnprior(self, theta, vref):
-        """Uninformative log-prior function for MCMC."""
-        vrot, noise, lnsigma, lnrho = theta
-        if abs(vrot - vref) / vref > 0.3:
-            return -np.inf
-        if noise <= 0.0:
-            return -np.inf
-        if not -5.0 < lnsigma < 10.:
-            return -np.inf
-        if not 0.0 <= lnrho <= 10.:
-            return -np.inf
-        return 0.0
 
     def _negative_lnlikelihood(self, theta, resample=False):
         """Negative log-likelihood function for optimization."""
         nll = -self._lnlikelihood(theta, resample)
         return nll if np.isfinite(nll) else 1e15
 
-    def _build_kernel(self, x, y, theta):
+    @staticmethod
+    def _build_kernel(x, y, theta):
         """Build the GP kernel. Returns None if gp.compute(x) fails."""
         noise, lnsigma, lnrho = theta[1:]
         k_noise = celerite.terms.JitterTerm(log_sigma=np.log(noise))
@@ -143,6 +131,20 @@ class ensemble:
         mask = np.logical_and(x >= self.velax_mask[0], x <= self.velax_mask[1])
         return x[mask], y[mask]
 
+    @staticmethod
+    def _lnprior(theta, vref):
+        """Uninformative log-prior function for MCMC."""
+        vrot, noise, lnsigma, lnrho = theta
+        if abs(vrot - vref) / vref > 0.3:
+            return -np.inf
+        if noise <= 0.0:
+            return -np.inf
+        if not -5.0 < lnsigma < 10.:
+            return -np.inf
+        if not 0.0 <= lnrho <= 10.:
+            return -np.inf
+        return 0.0
+
     def _lnlikelihood(self, theta, resample=False):
         """Log-likelihood function for the MCMC."""
 
@@ -150,7 +152,7 @@ class ensemble:
         x, y = self._get_masked_spectra(theta, resample=resample)
 
         # Build the GP model and calculate the log-likelihood.
-        gp = self._build_kernel(x, y, theta)
+        gp = ensemble._build_kernel(x, y, theta)
         if gp is None:
             return -np.inf
         ll = gp.log_likelihood(y, quiet=True)
@@ -158,7 +160,7 @@ class ensemble:
 
     def _lnprobability(self, theta, vref, resample=False):
         """Log-probability function for the MCMC."""
-        if ~np.isfinite(self._lnprior(theta, vref)):
+        if ~np.isfinite(ensemble._lnprior(theta, vref)):
             return -np.inf
         return self._lnlikelihood(theta, resample)
 
@@ -182,7 +184,8 @@ class ensemble:
         dV = np.trapz(y, x) / Tb / np.sqrt(2. * np.pi)
         return x0, dV, Tb
 
-    def _get_gaussian_width(self, spectrum, velax, fill_value=1e50):
+    @staticmethod
+    def _get_gaussian_width(spectrum, velax, fill_value=1e50):
         """Return the absolute width of a Gaussian fit to the spectrum."""
         try:
             dV = curve_fit(ensemble._gaussian, velax, spectrum,
@@ -200,7 +203,7 @@ class ensemble:
             x, y = self.deprojected_spectra(vrot, sort=True)
             mask = np.logical_and(x >= self.velax[0], x <= self.velax[-1])
             x, y = x[mask], y[mask]
-        return self._get_gaussian_width(y, x)
+        return ensemble._get_gaussian_width(y, x)
 
     # -- Line Profile Functions -- #
 
@@ -268,7 +271,8 @@ class ensemble:
         ax.set_xlim(self.velax[0], self.velax[-1])
         return ax
 
-    def _plot_corner(self, samples):
+    @staticmethod
+    def _plot_corner(samples):
         """Plot the corner plot for the MCMC."""
         import corner
         labels = [r'${\rm v_{rot}}$', r'${\rm \sigma_{rms}}$',
@@ -276,13 +280,14 @@ class ensemble:
         corner.corner(samples, labels=labels, quantiles=[0.16, 0.5, 0.84],
                       show_titles=True)
 
-    def _plot_walkers(self, sampler, nburnin):
+    @staticmethod
+    def _plot_walkers(sampler, nburnin):
         """Plot the walkers from the MCMC."""
         import matplotlib.pyplot as plt
         labels = [r'${\rm v_{rot}}$', r'${\rm \sigma_{rms}}$',
                   r'${\rm ln(\sigma)}$', r'${\rm ln(\rho)}$']
         for s, sample in enumerate(sampler.chain.T):
-            fig, ax = plt.subplots()
+            _, ax = plt.subplots()
             for walker in sample.T:
                 ax.plot(walker, alpha=0.1, color='k')
             ax.set_xlabel('Steps')
