@@ -39,8 +39,7 @@ There are also functions to build model spectra to test these methods in the `mo
 
 ```python
 from eddy.modelling import gaussian_ensemble
-spectra, theta, velax = gaussian_ensemble(vrot=1500., Tb=35., dV=350.,
-                                          dV_chan=50., rms=3.)
+spectra, theta, velax = gaussian_ensemble(vrot=1500., Tb=35., dV=350., dV_chan=50., rms=3.)
 ```
 
 More example can be found in the example notebooks.
