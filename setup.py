@@ -21,6 +21,6 @@ setup(
     url="https://github.com/richteague/eddy",
     license="MIT",
     include_package_data=True,
-    install_requires=['scipy', 'numpy', 'matplotlib', 'emcee'],
+    install_requires=['scipy', 'numpy', 'matplotlib', 'emcee', 'celerite'],
     zip_safe=False
 )
