@@ -1,5 +1,6 @@
 # eddy - Extracting Disk DYnamics
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.1440052.svg)](https://doi.org/10.5281/zenodo.1440052)
 [![Codacy Badge](https://api.codacy.com/project/badge/Grade/fc14f5eca31c418388424d4ec38a604b)](https://www.codacy.com/app/richteague/eddy?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=richteague/eddy&amp;utm_campaign=Badge_Grade)
 
 Python tools to recover precise rotation profiles of (predominantly azimuthally symmetric) disks. As the the rotation of the disk Doppler shifts the lines different amounts as a function of azimuth, shifting them back to a common systemic velocity allows us to sample the intrinsic line profile at a much higher effective resolution than the observations.
