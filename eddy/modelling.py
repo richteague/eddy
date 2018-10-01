@@ -1,7 +1,7 @@
 """Functions to easily build example spectra to test the approach."""
 
 import numpy as np
-from eddy import ensemble
+from eddy.annulus import ensemble
 
 
 def gaussian_ensemble(vrot, Tb=40., dV=350., tau=None, rms=1., dV_chan=30.,
