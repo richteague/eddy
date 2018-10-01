@@ -9,13 +9,13 @@ Python tools to recover precise rotation profiles of (predominantly azimuthally 
 To start, install the `eddy` package
 
 ```
-pip install .
+pip install --user .
 ```
 
-In brief, `eddy` contains an `ensemble` class which takes an array of spectra extracted from an annulus of constant radius, the polar coordinates of where the spectra were taken from (where `theta = 0` is the red-shifted major axis), and the velocity axis.
+In brief, `eddy.annulus` contains an `ensemble` class which takes an array of spectra extracted from an annulus of constant radius, the polar coordinates of where the spectra were taken from (where `theta = 0` is the red-shifted major axis), and the velocity axis.
 
 ```python
-from eddy.eddy import ensemble
+from eddy.annulus import ensemble
 annulus = ensemble(spectra=spectra, theta=theta, velax=velax)
 ```
 
