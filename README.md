@@ -34,6 +34,29 @@ vrot = annulus.get_vrot_GP()
 
 The former will not return uncertainties (only the value which minimizes the line width), while the `GP` approach will. A more thorough description of the functions available and how they work can be found in the Jupyter Notebooks in the Examples folder.
 
+## Idea
+
+For this approach we exploit the fact that most disks are predominantly azimuthally symmetric. This means that if we take an annulus of constant radius (after accounting for the flaring of the disk) all the spectra in the annulus should share the same line peak and width. They all have differing line centres due to the Doppler shift arising from the rotation of the disk. The figure below shows an example of this.
+
+---
+
+<p align='center'>
+  <img src="https://github.com/richteague/eddy/blob/master/Examples/Images/first_moment_and_spectra.png" width="713.2" height="383"><br/>
+  <b>Figure 1:</b> The left-hand panel shows the rotation pattern for a flared disk, with both near and far sides visible. The right hand panels show spectra taken from an annulus of constant radius. For an azimuthally symmetric disk these should be identical in terms of peak and width, however their centers will be offset due ot the projected component of the rotation.
+</p>
+
+---
+
+With an annulus of spectra and some rotation velocity, we can shift all the lines back to a common systemic velocity. Rather than assuming a velocity _a priori_, we can use the data to infer the correct value. `eddy` will search for the rotation velocity which either
+
+* minimizes the width of the stacked profile of shifted lines.
+
+or 
+
+* minimizes the variance in the residuals from a smooth model.
+
+The former method is very fast, but implicity assumes a Gaussian line profile and does not return an uncertainty. The second method is more robust and returns a reasonable measure of the uncertainty, however is slower due to the MCMC needed to sample the posterior distributions.
+
 ## Model Spectra
 
 There are also functions to build model spectra to test these methods in the `modelling.py`, returning the spectra, the polar angles and the velocity axis for a given set of parameters.
