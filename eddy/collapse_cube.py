@@ -2,14 +2,21 @@
 Collapse a FITS image cube down to a velocity map using one of several methods.
 This can be run from the command line using the default parameters, but also
 within a Python script to have access to more of the fine tuning of the
-functions.
+functions. The available methods are:
+
+'quadradtic' -  Using the bettermoments package from Teague & Foreman-Mackey
+                (2018) to return line center and peak values, both with
+                uncertainties.
+
+'maximum'    -  The velocity of the peak intensity for each pixel (ninth moment
+                if using CASA's immoments). Will return the peak value and the
+                channel.
+
 """
 
 import argparse
 import numpy as np
 import scipy.constants as sc
-
-
 from astropy.io import fits
 
 
@@ -19,12 +26,12 @@ def _get_cube(path):
 
 
 def _get_data(path):
-    """Read the FITS cube. Returning in [Jy/beam]."""
+    """Read the FITS cube."""
     return np.squeeze(fits.getdata(path))
 
 
 def _get_velax(path):
-    """Read the velocity axis information. Returning in [m/s]."""
+    """Read the velocity axis information."""
     return _read_velocity_axis(fits.getheader(path))
 
 
@@ -62,7 +69,6 @@ def _save_array(original_path, new_path, array):
     header = fits.getheader(original_path)
 
     # Remove pesky values.
-    ['naxis3', 'cdelt3', 'crval3', 'crpix3', 'history']
     for key in ['history']:
         try:
             header.pop(key, None)
@@ -84,23 +90,31 @@ def collapse_quadratic(velax, data, dV=None, rms=None, N=5):
     (2018) (https://github.com/richteague/bettermoments).
 
     Args:
-        velax (ndarray): -
-        data (ndarray): -
-        linewidth (Optional[float]): -
-        rms (Optional[float]): -
-        N (Optional[int]): -
+        velax (ndarray): Velocity axis of the cube.
+        data (ndarray): Flux density or brightness temperature array. Assumes
+            that the first axis is the velocity axis.
+        dV (Optional[float]): Doppler width of the line. If specified will be
+            used to smooth the data prior to the quadratic fit.
+        rms (Optional[float]): Noise per pixel. If none is specified, will be
+            calculated from the first and last N channels.
+        N (Optional[int]): Number of channels to use in the estimation of the
+            noise.
 
     Returns:
-        v0 (ndarray): -
-        dV0 (ndarray): -
-        Fnu (ndarray): -
-        dFnu (ndarray): -
+        v0 (ndarray): Line center in the same units as velax.
+        dv0 (ndarray): Uncertainty on v0 in the same units as velax.
+        Fnu (ndarray): Leak peak in the same units as data.
+        dFnu (ndarray): Uncertainty in Fnu in the same units as data.
     """
 
     try:
         from bettermoments import quadratic
     except ImportError:
         raise ImportError("Cannot find `bettermoments`.")
+
+    # Check the shape.
+    if data.shape[0] != velax.size:
+        raise ValueError("Must have the zeroth axis as velocity.")
 
     # Estimate the uncertainty.
     if rms is None:
@@ -161,6 +175,12 @@ if __name__ == '__main__':
         _save_array(args.path, args.path.replace('.fits', '_dv0.fits'), dv0)
         _save_array(args.path, args.path.replace('.fits', '_Fnu.fits'), Fnu)
         _save_array(args.path, args.path.replace('.fits', '_dFnu.fits'), dFnu)
+
+    if args.method.lower() == 'maximum':
+        raise NotImplementedError("Still working on this.")
+
+    if args.method.lower() == 'first':
+        raise NotImplementedError("Still working on this.")
 
     else:
         raise ValueError("Unknown method.")

@@ -49,11 +49,80 @@ class rotationmap:
 
     # -- Fitting functions. -- #
 
-    def fit_keplerian(self):
+    def fit_keplerian(self, p0, params, r_min=None, r_max=None, optimize=False,
+                      nwalkers=None, nburnin=300, nsteps=100, scatter=1e-3,
+                      plot_walkers=True, plot_corner=True):
         """
         Fit a Keplerian rotation profile to the data.
+
+        Args:
+            p0:
+            params:
+            r_min:
+            r_max:
+            optimize:
+            nwalkers:
+            scatter:
+
+        Returns:
+            what.
         """
+
+        # Load up emcee.
+        try:
+            import emcee
+        except ImportError:
+            raise ImportError("Cannot find emcee.")
+
+        # Check the dictionary. May need some more work.
+        params = rotationmap._verify_dictionary(params)
+
+        # Calculate the inverse variance mask.
+        r_min = r_min if r_min is not None else 0.0
+        r_max = r_max if r_max is not None else 1e5
+        self.ivar = self._calculate_ivar(x0=params['x0'], y0=params['y0'],
+                                         inc=params['inc'], PA=params['PA'],
+                                         z0=params['z0'], psi=params['psi'],
+                                         tilt=params['tilt'], r_min=r_min,
+                                         r_max=r_max)
+
+        # Run an initial optimization using scipy.minimize.
+        if optimize:
+            raise NotImplementedError("Not working yet.")
+
+        # Make sure all starting positions are valid.
+        # COMING SOON.
+
+        labels = rotationmap._get_labels(params)
+        if len(labels) != len(p0):
+            raise ValueError("Mismatch in labels and p0. Check for integers.")
+
+        # Set up the MCMC.
+        ndim = len(p0)
+        nwalkers = 2 * ndim if nwalkers is None else nwalkers
+        p0 = rotationmap._random_p0(p0, scatter, nwalkers)
+
+        sampler = emcee.EnsembleSampler(nwalkers, ndim, self._ln_probability,
+                                        args=(params))
+        sampler.run_mcmc(p0, nburnin + nsteps)
+        samples = sampler.chain[:, -int(nsteps):]
+        samples = samples.reshape(-1, samples.shape[-1])
+
+        # Diagnostic plots.
+        if plot_walkers:
+            rotationmap.plot_walkers(sampler.chain.T, nburnin, labels)
+        if plot_corner:
+            functions.plot_corner(samples, labels)
+
         return
+
+    @staticmethod
+    def _random_p0(p0, scatter, nwalkers):
+        """Get the starting positions."""
+        p0 = np.squeeze(p0)
+        dp0 = np.random.randn(nwalkers * len(p0)).reshape(nwalkers, len(p0))
+        dp0 = np.where(p0 == 0.0, 1.0, p0)[None, :] * (1.0 + scatter * dp0)
+        return np.where(p0[None, :] == 0.0, dp0 - 1.0, dp0)
 
     def _ln_likelihood(self, params):
         """Log-likelihood function. Simple chi-squared likelihood."""
@@ -90,6 +159,25 @@ class rotationmap:
             return -np.inf
         return 0.0
 
+    def _calc_ivar(self, x0=0.0, y0=0.0, inc=None, PA=0.0, z0=0.0, psi=0.0,
+                   tilt=0.0, r_min=0.0, r_max=1e5):
+        """Calculate the inverse variance including radius mask."""
+        rvals = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA,
+                                 z0=z0, psi=psi, tilt=tilt)[0]
+        mask = np.logical_and(rvals >= r_min, rvals <= r_max)
+        mask = np.logical_and(mask, np.isfinite(self.data))
+        return np.where(mask, np.power(self.error, -2.0), 0.0)
+
+    @staticmethod
+    def _get_labels(params):
+        """Return the labels of the parameters to fit."""
+        idxs, labs = [], []
+        for k in params.keys():
+            if type(params[k]) is int:
+                idxs.append(params[k])
+                labs.append(k)
+        return np.array(labs)[np.argsort(idxs)]
+
     @staticmethod
     def _populate_dictionary(theta, params):
         """Populate the dictionary of free parameters."""
@@ -118,7 +206,7 @@ class rotationmap:
     # -- Deprojection functions. -- #
 
     def disk_coords(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
-                    nearest='north', frame='polar'):
+                    tilt=0.0, frame='polar'):
         """
         Get the disk coordinates given certain geometrical parameters and an
         emission surface. The emission surface is parameterized as a powerlaw
@@ -148,10 +236,6 @@ class rotationmap:
         frame = frame.lower()
         if frame not in ['cartesian', 'polar']:
             raise ValueError("frame must be 'cartesian' or 'polar'.")
-        nearest = nearest.lower()
-        if nearest not in ['north', 'south']:
-            raise ValueError("Either 'north' or 'south' must be closer.")
-        tilt = 1.0 if nearest == 'north' else -1.0
 
         # Define the emission surface function. This approach should leave
         # some flexibility for more complex emission surface parameterizations.
@@ -286,3 +370,35 @@ class rotationmap:
         if self.absolute:
             return axis
         return 3600 * axis
+
+    # -- Plotting functions. -- #
+
+    @staticmethod
+    def plot_walkers(samples, nburnin=None, labels=None):
+        """Plot the walkers to check if they are burning in."""
+
+        # Import matplotlib.
+        import matplotlib.pyplot as plt
+
+        # Check the length of the label list.
+        if labels is None:
+            if samples.shape[0] != len(labels):
+                raise ValueError("Not correct number of labels.")
+
+        # Cycle through the plots.
+        for s, sample in enumerate(samples):
+            fig, ax = plt.subplots()
+            for walker in sample.T:
+                ax.plot(walker, alpha=0.1, color='k')
+            ax.set_xlabel('Steps')
+            if labels is not None:
+                ax.set_ylabel(labels[s])
+            if nburnin is not None:
+                ax.axvline(nburnin, ls=':', color='r')
+
+    @staticmethod
+    def plot_corner(samples, labels=None, quantiles=[0.16, 0.5, 0.84]):
+        """Plot the corner plot to check for covariances."""
+        import corner
+        corner.corner(samples, labels=labels, title_fmt='.4f',
+                      quantiles=quantiles, show_titles=True)
