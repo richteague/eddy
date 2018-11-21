@@ -22,11 +22,15 @@ class ensemble(object):
         self.theta = theta
         self.spectra = spectra
         if remove_empty:
-            idxs = np.nansum(spectra, axis=-1) > 0.0
+            idxs = np.sum(spectra, axis=-1) > 0.0
             self.theta = self.theta[idxs]
             self.spectra = self.spectra[idxs]
         self.theta_deg = np.degrees(theta)
         self.spectra_flat = spectra.flatten()
+
+        # Check there's actually spectra.
+        if self.theta.size < 1:
+            raise ValueError("No finite spectra. Check for NaNs.")
 
         # Velocity axis.
         self.velax = velax
@@ -93,6 +97,8 @@ class ensemble(object):
         if optimize:
             p0 = self._optimize_p0(p0, resample=resample, **kwargs)
         p0 = ensemble._randomize_p0(p0, nwalkers, scatter)
+        if np.any(np.isnan(p0)):
+            raise ValueError('NaNs in the p0 array.')
 
         # Set up emcee.
         sampler = emcee.EnsembleSampler(nwalkers, 4, self._lnprobability,
@@ -122,7 +128,14 @@ class ensemble(object):
         res = minimize(self._negative_lnlikelihood, x0=p0,
                        args=(resample), **kwargs)
         if not res.success:
-            print("WARNING: scipy.optimize.minimze did not converge.")
+            kwargs['method'] = kwargs.get('method', 'Nelder-Mead')
+            kwargs['options'] = {'maxiter': 100000}
+            res = minimize(self._negative_lnlikelihood, x0=p0,
+                           args=(resample), **kwargs)
+            if not res.success:
+                print("WARNING: scipy.optimize.minimze did not converge.")
+            else:
+                p0 = res.x
         else:
             p0 = res.x
         return p0
@@ -130,7 +143,8 @@ class ensemble(object):
     def _guess_parameters_GP(self, vref, fit=True):
         """Guess the starting positions from the spectra."""
         vref = self.guess_parameters(fit=fit)[0] if vref is None else vref
-        noise = np.std([self.spectra[:, :10], self.spectra[:, -10:]])
+        noise = int(min(10, self.spectra.shape[1] / 3.0))
+        noise = np.std([self.spectra[:, :noise], self.spectra[:, -noise:]])
         ln_sig = np.log(np.std(self.spectra))
         ln_rho = np.log(150.)
         return np.array([vref, noise, ln_sig, ln_rho])
@@ -157,7 +171,7 @@ class ensemble(object):
         try:
             gp.compute(x)
         except Exception:
-            return -None
+            return None
         return gp
 
     def _get_masked_spectra(self, theta, resample=True):
@@ -178,7 +192,7 @@ class ensemble(object):
             return -np.inf
         if noise <= 0.0:
             return -np.inf
-        if not -5.0 < lnsigma < 10.:
+        if not -15.0 < lnsigma < 10.:
             return -np.inf
         if not 0.0 <= lnrho <= 10.:
             return -np.inf
