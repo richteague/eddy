@@ -15,7 +15,7 @@ import scipy.constants as sc
 class rotationmap:
 
     def __init__(self, path, uncertainty=None, clip=None, downsample=None):
-        """Initialize."""
+        """Initialize the class."""
 
         # Read in the data and position axes.
         self.data = fits.getdata(path)
@@ -58,10 +58,10 @@ class rotationmap:
 
     # -- Fitting functions. -- #
 
-    def fit_keplerian(self, p0, params, r_min=None, r_max=None, optimize=False,
+    def fit_keplerian(self, p0, params, r_min=None, r_max=None, optimize=True,
                       nwalkers=None, nburnin=300, nsteps=100, scatter=1e-3,
                       plot_walkers=True, plot_corner=True, plot_bestfit=True,
-                      plot_residual=False):
+                      plot_residual=False, return_samples=False):
         """
         Fit a Keplerian rotation profile to the data.
 
@@ -90,15 +90,26 @@ class rotationmap:
             optimize (Optional[bool]): Use scipy.optimize to find the p0 values
                 which maximize the likelihood. Better results will likely be
                 found.
-            nwalkers: Number of walkers to use for the MCMC.
-            scatter: Scatter used in distributing walker starting positions
-                around the initial p0 values.
-            plot_walkers: Plot the samples taken by the walkers.
-            plot_corner: Plot the covariances of the posteriors.
-            plot_bestfit: Plot the best fit model.
+            nwalkers (Optional[int]): Number of walkers to use for the MCMC.
+            scatter (Optional[float]): Scatter used in distributing walker
+                starting positions around the initial p0 values.
+            plot_walkers (Optional[bool]): Plot the samples taken by the
+                walkers.
+            plot_corner (Optional[bool]): Plot the covariances of the
+                posteriors.
+            plot_bestfit (Optional[bool]): Plot the best fit model.
+            plot_residual (Optional[bool]): Plot the residual from the data and
+                the best fit model.
+            return_samples (Optional[bool]): If true, return all the samples of
+                the posterior distribution after the burn in period, otherwise
+                just return the 16th, 50th and 84th percentiles of each
+                posterior distribution.
 
         Returns:
-            what.
+            samples (ndarray): If return_sample = True, return all the samples
+                of the posterior distribution after the burn in period,
+                otherwise just return the 16th, 50th and 84th percentiles of
+                each posterior distribution.
         """
 
         # Load up emcee.
@@ -120,11 +131,20 @@ class rotationmap:
                                     z0=temp['z0'], psi=temp['psi'],
                                     tilt=temp['tilt'], r_min=r_min,
                                     r_max=r_max)
-        self.plot_data(ivar=self.ivar)
 
-        # Run an initial optimization using scipy.minimize.
+        # Run an initial optimization using scipy.minimize. Recalculate the
+        # inverse variance mask.
         if optimize:
-            raise NotImplementedError("Not working yet.")
+            p0 = self._optimize_p0(p0, params)
+            temp = rotationmap._populate_dictionary(p0, params)
+            self.ivar = self._calc_ivar(x0=temp['x0'], y0=temp['y0'],
+                                        inc=temp['inc'], PA=temp['PA'],
+                                        z0=temp['z0'], psi=temp['psi'],
+                                        tilt=temp['tilt'], r_min=r_min,
+                                        r_max=r_max)
+
+        # Plot the data to show where the mask is.
+        self.plot_data(ivar=self.ivar)
 
         # Make sure all starting positions are valid.
         # COMING SOON.
@@ -158,7 +178,31 @@ class rotationmap:
         if plot_residual:
             self.plot_bestfit(bestfit, ivar=self.ivar, residual=True)
 
-        return
+        # Return the posterior distributions.
+        if return_samples:
+            return samples
+        return np.percentile(samples, [16, 60, 84], axis=0)
+
+    def _optimize_p0(self, theta, params):
+        """Optimize the initial starting positions."""
+        from scipy.optimize import minimize
+
+        # Negative log-likelihood function.
+        def nlnL(theta):
+            return -self._ln_probability(theta, params)
+
+        # TODO: think of a way to include bounds.
+
+        res = minimize(nlnL, x0=theta, method='TNC',
+                       options={'maxiter': 100000, 'ftol': 1e-3})
+        theta = res.x
+        if res.success:
+            print("Optimized starting positions:")
+        else:
+            print("WARNING: scipy.optimize did not converge.")
+            print("Starting positions:")
+        print(['%.4e' % t for t in theta])
+        return theta
 
     @staticmethod
     def _random_p0(p0, scatter, nwalkers):
@@ -503,7 +547,7 @@ class rotationmap:
 
         # Cycle through the plots.
         for s, sample in enumerate(samples):
-            _, ax = plt.subplots()
+            ax = plt.subplots()[1]
             for walker in sample.T:
                 ax.plot(walker, alpha=0.1, color='k')
             ax.set_xlabel('Steps')
