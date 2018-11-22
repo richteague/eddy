@@ -2,8 +2,9 @@
 Class to load up a velocity map and fit a Keplerian profile to it. The main
 functions of interest are:
 
-    disk_coords - To be filled in.
-    keplerian   - To be filled in.
+    disk_coords     - To be filled in.
+    keplerian       - To be filled in.
+    fit_keplerian   - To be filled in.
 """
 
 import numpy as np
@@ -19,9 +20,9 @@ class rotationmap:
         # Read in the data and position axes.
         self.data = fits.getdata(path)
         self.header = fits.getheader(path)
-        try:
+        if uncertainty is not None:
             self.error = fits.getdata(uncertainty)
-        except:
+        else:
             print("No uncertainties found, assuming uncertainties of 10%.")
             self.error = 0.1 * self.data
         self.error = np.where(np.isnan(self.error), 0.0, self.error)
@@ -51,26 +52,50 @@ class rotationmap:
             self.bmin = self.header['bmin'] * 3600.
             self.bpa = self.header['bpa']
         except KeyError:
-            self.bmaj = self.dpix
-            self.bmin = self.dpix
-            self.bpa = 0.0
+            self.bmaj = None
+            self.bmin = None
+            self.bpa = None
 
     # -- Fitting functions. -- #
 
     def fit_keplerian(self, p0, params, r_min=None, r_max=None, optimize=False,
                       nwalkers=None, nburnin=300, nsteps=100, scatter=1e-3,
-                      plot_walkers=True, plot_corner=True):
+                      plot_walkers=True, plot_corner=True, plot_bestfit=True,
+                      plot_residual=False):
         """
         Fit a Keplerian rotation profile to the data.
 
         Args:
-            p0:
-            params:
-            r_min:
-            r_max:
-            optimize:
-            nwalkers:
-            scatter:
+            p0 (list): List of the free parameters to fit.
+            params (dictionary): Dictionary of the parameters used for the
+                Keplerian model. If the value is fixed, specify the values:
+
+                    params['x0'] = 0.45
+
+                while if it is a free parameter, provide the index in p0:
+
+                    params['x0'] = 0
+
+                making sure the value is an integer. The values needed are:
+                'x0', 'y0', 'inc', 'PA', 'mstar', 'vlsr', 'dist'. If a flared
+                emission surface is wanted then you can add 'z0', 'psi' and
+                'tilt' with their descriptions found in disk_coords(). To
+                include a convolution with the beam stored in the header use
+                params['beam'] = True, where this must be a boolean, not an
+                integer.
+            r_min (Optional[float]): Inner radius to fit in (arcsec).
+            r_max (Optional[float]): Outer radius to fit in (arcsec). Note that
+                for the masking the default p0 and params values are used for
+                the deprojection, or those found from the optimization.
+            optimize (Optional[bool]): Use scipy.optimize to find the p0 values
+                which maximize the likelihood. Better results will likely be
+                found.
+            nwalkers: Number of walkers to use for the MCMC.
+            scatter: Scatter used in distributing walker starting positions
+                around the initial p0 values.
+            plot_walkers: Plot the samples taken by the walkers.
+            plot_corner: Plot the covariances of the posteriors.
+            plot_bestfit: Plot the best fit model.
 
         Returns:
             what.
@@ -83,7 +108,7 @@ class rotationmap:
             raise ImportError("Cannot find emcee.")
 
         # Check the dictionary. May need some more work.
-        params = rotationmap._verify_dictionary(params)
+        params = self._verify_dictionary(params)
 
         # Calculate the inverse variance mask.
         r_min = r_min if r_min is not None else 0.0
@@ -107,8 +132,9 @@ class rotationmap:
         labels = rotationmap._get_labels(params)
         if len(labels) != len(p0):
             raise ValueError("Mismatch in labels and p0. Check for integers.")
+        print("Assuming p0 = [%s]." % (', '.join(labels)))
 
-        # Set up the MCMC.
+        # Set up and run the MCMC.
         ndim = len(p0)
         nwalkers = 2 * ndim if nwalkers is None else nwalkers
         p0 = rotationmap._random_p0(p0, scatter, nwalkers)
@@ -119,11 +145,18 @@ class rotationmap:
         samples = sampler.chain[:, -int(nsteps):]
         samples = samples.reshape(-1, samples.shape[-1])
 
+        bestfit = np.median(samples, axis=0)
+        bestfit = rotationmap._populate_dictionary(bestfit, params)
+
         # Diagnostic plots.
         if plot_walkers:
             rotationmap.plot_walkers(sampler.chain.T, nburnin, labels)
         if plot_corner:
             rotationmap.plot_corner(samples, labels)
+        if plot_bestfit:
+            self.plot_bestfit(bestfit, ivar=self.ivar, residual=False)
+        if plot_residual:
+            self.plot_bestfit(bestfit, ivar=self.ivar, residual=True)
 
         return
 
@@ -185,22 +218,23 @@ class rotationmap:
         """Return the labels of the parameters to fit."""
         idxs, labs = [], []
         for k in params.keys():
-            if type(params[k]) is int:
-                idxs.append(params[k])
-                labs.append(k)
+            if isinstance(params[k], int):
+                if not isinstance(params[k], bool):
+                    idxs.append(params[k])
+                    labs.append(k)
         return np.array(labs)[np.argsort(idxs)]
 
     @staticmethod
     def _populate_dictionary(theta, dictionary_in):
         """Populate the dictionary of free parameters."""
         dictionary = dictionary_in.copy()
-        for k, key in enumerate(dictionary.keys()):
-            if type(dictionary[key]) is int:
-                dictionary[key] = theta[dictionary[key]]
+        for key in dictionary.keys():
+            if isinstance(dictionary[key], int):
+                if not isinstance(dictionary[key], bool):
+                    dictionary[key] = theta[dictionary[key]]
         return dictionary
 
-    @staticmethod
-    def _verify_dictionary(params):
+    def _verify_dictionary(self, params):
         """Check there are the the correct keys."""
         if params.get('x0') is None:
             params['x0'] = 0.0
@@ -215,9 +249,12 @@ class rotationmap:
         if params.get('tilt') is None:
             params['tilt'] = 0.0
         if params.get('vlsr') is None:
-            params['vlsr'] = 0.0
+            params['vlsr'] = self.vlsr
         if params.get('beam') is None:
             params['beam'] = False
+        elif params.get('beam'):
+            if self.bmaj is None:
+                params['beam'] = False
         return params
 
     # -- Deprojection functions. -- #
@@ -232,20 +269,25 @@ class rotationmap:
         psi = 1.0.
 
         Args:
-            x0 (Optional[float]): -
-            y0 (Optional[float]): -
-            inc (Optional[float]): -
-            PA (Optional[float]): -
-            frame (Optional[str]): -
-            z0 (Optional[float]): -
-            psi (Optional[float]): -
-            nearest (Optional[str]): -
-            frame (Optional[str]): -
+            x0 (Optional[float]): Source right ascension offset (arcsec).
+            y0 (Optional[float]): Source declination offset (arcsec).
+            inc (Optional[float]): Source inclination (degrees).
+            PA (Optional[float]): Source position angle (degrees). Measured
+                between north and the red-shifted semi-major axis in an
+                easterly direction.
+            z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
+                To get the far side of the disk, make this number negative.
+            psi (Optional[float]): Flaring angle for the emission surface.
+            tilt (Optional[float]): Value between -1 and 1, positive values
+                result in the north side of the disk being closer to the
+                observer; negative values the south.
+            frame (Optional[str]): Frame of reference for the returned
+                coordinates. Either 'polar' or 'cartesian'.
 
         Returns:
-            c1 (ndarryy): -
-            c2 (ndarray): -
-            c3 (ndarray): -
+            c1 (ndarryy): Either r (cylindrical) or x depending on the frame.
+            c2 (ndarray): Either theta or y depending on the frame.
+            c3 (ndarray): Height above the midplane, z.
         """
 
         # Check the input variables.
@@ -270,13 +312,15 @@ class rotationmap:
             c3 = func(c1)
         return c1, c2, c3
 
-    def _rotate_coords(self, x, y, PA):
+    @staticmethod
+    def _rotate_coords(x, y, PA):
         """Rotate (x, y) by PA [deg]."""
         x_rot = x * np.cos(np.radians(PA)) - y * np.sin(np.radians(PA))
         y_rot = y * np.cos(np.radians(PA)) + x * np.sin(np.radians(PA))
         return x_rot, y_rot
 
-    def _deproject_coords(self, x, y, inc):
+    @staticmethod
+    def _deproject_coords(x, y, inc):
         """Deproject (x, y) by inc [deg]."""
         return x, y / np.cos(np.radians(inc))
 
@@ -292,8 +336,8 @@ class rotationmap:
     def _get_midplane_cart_coords(self, x0, y0, inc, PA):
         """Return cartesian coordaintes of midplane in [arcsec, arcsec]."""
         x_sky, y_sky = self._get_cart_sky_coords(x0, y0)
-        x_rot, y_rot = self._rotate_coords(y_sky, x_sky, -PA)
-        return self._deproject_coords(x_rot, y_rot, inc)
+        x_rot, y_rot = rotationmap._rotate_coords(y_sky, x_sky, -PA)
+        return rotationmap._deproject_coords(x_rot, y_rot, inc)
 
     def _get_midplane_polar_coords(self, x0, y0, inc, PA):
         """Return the polar coordinates of midplane in [arcsec, radians]."""
@@ -326,20 +370,24 @@ class rotationmap:
         see Teague et al. (2018a,c) for a thorough description.
 
         Args:
-            x0 (Optional[float]): -
-            y0 (Optional[float]): -
-            inc (Optional[float]): -
-            PA (Optional[float]): -
-            frame (Optional[str]): -
-            z0 (Optional[float]): -
-            psi (Optional[float]): -
-            nearest (Optional[str]): -
-            mstar (Optional[float]): -
-            disk (Optional[float]): -
-            vlsr (Optional[floar]): -
+            x0 (Optional[float]): Source right ascension offset (arcsec).
+            y0 (Optional[float]): Source declination offset (arcsec).
+            inc (Optional[float]): Source inclination (degrees).
+            PA (Optional[float]): Source position angle (degrees). Measured
+                between north and the red-shifted semi-major axis in an
+                easterly direction.
+            z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
+                To get the far side of the disk, make this number negative.
+            psi (Optional[float]): Flaring angle for the emission surface.
+            tilt (Optional[float]): Value between -1 and 1, positive values
+                result in the north side of the disk being closer to the
+                observer; negative values the south.
+            mstar (Optional[float]): Mass of the star in (solar masses).
+            dist (Optional[float]): Distance to the source in (parsec).
+            vlsr (Optional[floar]): Systemic velocity in (m/s).
 
         Returns:
-            vproj (ndarray): Projected Keplerian rotation at each pixel [m/s].
+            vproj (ndarray): Projected Keplerian rotation at each pixel (m/s).
         """
         coords = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0, psi=psi,
                                   tilt=tilt, frame='polar')
@@ -397,18 +445,56 @@ class rotationmap:
         import matplotlib.cm as cm
         import matplotlib.pyplot as plt
         if ax is None:
-            fig, ax = plt.subplots()
+            _, ax = plt.subplots()
         if levels is None:
             levels = np.nanpercentile(self.data, [2, 98]) - self.vlsr
             levels = max(abs(levels[0]), abs(levels[1]))
             levels = self.vlsr + np.linspace(-levels, levels, 30)
         im = ax.contourf(self.xaxis, self.yaxis, self.data, levels,
                          cmap=cm.RdBu_r, extend='both')
+        cb = plt.colorbar(im, pad=0.02, ticks=np.arange(-20, 20, 0.25))
+        cb.set_label(r'${\rm  v_{obs} \quad (km\,s^{-1})}$',
+                     rotation=270, labelpad=15)
         if ivar is not None:
             ax.contour(self.xaxis, self.yaxis, ivar, [0], colors='k')
-        cb = plt.colorbar(im, pad=0.02, ticks=np.arange(-20, 20, 0.25))
-        cb.set_label('Line of Sight Velocity (km/s)', rotation=270,
-                     labelpad=15)
+        ax.set_aspect(1)
+        ax.grid(ls=':', color='k', alpha=0.3)
+        ax.set_xlim(self.xaxis.max(), self.xaxis.min())
+        ax.set_ylim(self.yaxis.min(), self.yaxis.max())
+        ax.set_xlabel('Offset (arcsec)')
+        ax.set_ylabel('Offset (arcsec)')
+
+    def plot_bestfit(self, params, ivar=None, residual=False, ax=None):
+        """Plot the best-fit model."""
+        import matplotlib.cm as cm
+        import matplotlib.pyplot as plt
+        if ax is None:
+            _, ax = plt.subplots()
+
+        vkep = self._make_model(params)
+        if residual:
+            vkep -= self.data
+        levels = np.where(self.ivar != 0.0, vkep * 1e-3, np.nan)
+        levels = np.nanpercentile(levels, [2, 98])
+        if residual:
+            levels = max(abs(levels[0]), abs(levels[1]))
+            levels = np.array([-levels, levels])
+            ticks = None
+        else:
+            ticks = np.arange(-20, 20)
+        levels = np.linspace(levels[0], levels[1], 30)
+
+        im = ax.contourf(self.xaxis, self.yaxis, vkep, levels,
+                         cmap=cm.RdBu_r, extend='both')
+        if ivar is not None:
+            ax.contour(self.xaxis, self.yaxis, ivar, [0], colors='k')
+        cb = plt.colorbar(im, pad=0.02, ticks=ticks)
+        if residual:
+            cb.set_label(r'${\rm v_{obs} - v_{Kep} \quad (km\,s^{-1})}$',
+                         rotation=270, labelpad=15)
+        else:
+            cb.set_label(r'${\rm  v_{Kep} \quad (km\,s^{-1})}$',
+                         rotation=270, labelpad=15)
         ax.set_aspect(1)
         ax.grid(ls=':', color='k', alpha=0.3)
         ax.set_xlim(self.xaxis.max(), self.xaxis.min())
@@ -440,8 +526,9 @@ class rotationmap:
                 ax.axvline(nburnin, ls=':', color='r')
 
     @staticmethod
-    def plot_corner(samples, labels=None, quantiles=[0.16, 0.5, 0.84]):
+    def plot_corner(samples, labels=None, quantiles=None):
         """Plot the corner plot to check for covariances."""
         import corner
+        quantiles = [0.16, 0.5, 0.84] if quantiles is None else quantiles
         corner.corner(samples, labels=labels, title_fmt='.4f',
                       quantiles=quantiles, show_titles=True)
