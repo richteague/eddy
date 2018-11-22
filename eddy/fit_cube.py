@@ -2,9 +2,23 @@
 Class to load up a velocity map and fit a Keplerian profile to it. The main
 functions of interest are:
 
-    disk_coords     - To be filled in.
-    keplerian       - To be filled in.
-    fit_keplerian   - To be filled in.
+    disk_coords: Given geometrical properties of the disk and the emission
+        surface, will deproject the data into a face-on view in either polar or
+        cartesian coordaintes.
+
+    keplerian: Builds a Keplerian rotation pattern with the provided
+        geometrical properties and emission surface. Does not account for any
+        deviations due to pressure gradients or self gravity.
+
+    fit_keplerian: Fits a Keplerian profile to the data. It is possible to hold
+        various parameters constant or let them vary. Also allows for a flared
+        emission surface which can be constrained with good quality data.
+
+TODO:
+
+    1) Include bounds for the initial optimization.
+    2) More robust plotting for the residual maps. A separate function maybe?
+    3) Can we do the deprojection analytically rather than iteratively?
 """
 
 import numpy as np
@@ -449,7 +463,7 @@ class rotationmap:
                               psi=params['psi'], mstar=params['mstar'],
                               dist=params['dist'], tilt=params['tilt'])
         if params['beam']:
-            raise NotImplementedError("Woah.")
+            vkep = self._convolve_image(vkep, self._beamkernel())
         return vkep
 
     # -- Helper functions for loading up the data. -- #
@@ -481,6 +495,39 @@ class rotationmap:
         a_del = self.header['cdelt%d' % a]
         a_pix = self.header['crpix%d' % a]
         return 3600 * ((np.arange(a_len) - a_pix + 0.5) * a_del)
+
+    # -- Convolution functions. -- #
+
+    def _beamkernel(self, bmaj=None, bmin=None, bpa=None, nbeams=1.0):
+        """Returns the 2D Gaussian kernel for convolution."""
+        from astropy.convolution import Kernel
+        if bmaj is None and bmin is None and bpa is None:
+            bmaj = self.bmaj
+            bmin = self.bmin
+            bpa = self.bpa
+        bmaj /= self.dpix * self.fwhm
+        bmin /= self.dpix * self.fwhm
+        bpa = np.radians(bpa)
+        if nbeams > 1.0:
+            bmin *= nbeams
+            bmaj *= nbeams
+        return Kernel(self._gaussian2D(bmin, bmaj, bpa + 90.).T)
+
+    def _gaussian2D(self, dx, dy, PA=0.0):
+        """2D Gaussian kernel in pixel coordinates."""
+        xm = np.arange(-4*np.nanmax([dy, dx]), 4*np.nanmax([dy, dx])+1)
+        x, y = np.meshgrid(xm, xm)
+        x, y = self._rotate_coords(x, y, PA)
+        k = np.power(x / dx, 2) + np.power(y / dy, 2)
+        return np.exp(-0.5 * k) / 2. / np.pi / dx / dy
+
+    def _convolve_image(self, image, kernel, fast=True):
+        """Convolve the image with the provided kernel."""
+        if fast:
+            from astropy.convolution import convolve_fft
+            return convolve_fft(image, kernel)
+        from astropy.convolution import convolve
+        return convolve(image, kernel)
 
     # -- Plotting functions. -- #
 
@@ -517,7 +564,7 @@ class rotationmap:
             levels = np.array([-levels, levels])
             ticks = None
         else:
-            ticks = np.arange(-20, 20)
+            ticks = np.arange(-20, 20, 0.25)
         levels = np.linspace(levels[0], levels[1], 30)
 
         im = ax.contourf(self.xaxis, self.yaxis, vkep, levels,
@@ -564,6 +611,17 @@ class rotationmap:
         corner.corner(samples, labels=labels, title_fmt='.4f',
                       quantiles=quantiles, show_titles=True)
 
+    def plot_beam(self, ax, dx=0.125, dy=0.125, **kwargs):
+        """Plot the sythensized beam on the provided axes."""
+        from matplotlib.patches import Ellipse
+        beam = Ellipse(ax.transLimits.inverted().transform((dx, dy)),
+                       width=self.bmin, height=self.bmaj, angle=-self.bpa,
+                       fill=False, hatch=kwargs.get('hatch', '////////'),
+                       lw=kwargs.get('linewidth', kwargs.get('lw', 1)),
+                       color=kwargs.get('color', kwargs.get('c', 'k')),
+                       zorder=kwargs.get('zorder', 1000))
+        ax.add_patch(beam)
+
     def _gentrify_plot(self, ax):
         """Gentrify the plot."""
         ax.set_aspect(1)
@@ -572,3 +630,5 @@ class rotationmap:
         ax.set_ylim(self.yaxis.min(), self.yaxis.max())
         ax.set_xlabel('Offset (arcsec)')
         ax.set_ylabel('Offset (arcsec)')
+        if self.bmaj is not None:
+            self.plot_beam(ax=ax)
