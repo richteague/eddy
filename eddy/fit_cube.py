@@ -471,10 +471,10 @@ class rotationmap:
         if ax is None:
             _, ax = plt.subplots()
 
-        vkep = self._make_model(params)
+        vkep = self._make_model(params) * 1e-3
         if residual:
             vkep -= self.data
-        levels = np.where(self.ivar != 0.0, vkep * 1e-3, np.nan)
+        levels = np.where(self.ivar != 0.0, vkep, np.nan)
         levels = np.nanpercentile(levels, [2, 98])
         if residual:
             levels = max(abs(levels[0]), abs(levels[1]))
