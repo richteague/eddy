@@ -440,12 +440,11 @@ class rotationmap:
 
     # -- Plotting functions. -- #
 
-    def plot_data(self, ax=None, levels=None, ivar=None):
+    def plot_data(self, levels=None, ivar=None):
         """Plot the first moment map."""
         import matplotlib.cm as cm
         import matplotlib.pyplot as plt
-        if ax is None:
-            _, ax = plt.subplots()
+        ax = plt.subplots()[1]
         if levels is None:
             levels = np.nanpercentile(self.data, [2, 98]) - self.vlsr
             levels = max(abs(levels[0]), abs(levels[1]))
@@ -457,20 +456,13 @@ class rotationmap:
                      rotation=270, labelpad=15)
         if ivar is not None:
             ax.contour(self.xaxis, self.yaxis, ivar, [0], colors='k')
-        ax.set_aspect(1)
-        ax.grid(ls=':', color='k', alpha=0.3)
-        ax.set_xlim(self.xaxis.max(), self.xaxis.min())
-        ax.set_ylim(self.yaxis.min(), self.yaxis.max())
-        ax.set_xlabel('Offset (arcsec)')
-        ax.set_ylabel('Offset (arcsec)')
+        self._gentrify_plot(ax)
 
-    def plot_bestfit(self, params, ivar=None, residual=False, ax=None):
+    def plot_bestfit(self, params, ivar=None, residual=False):
         """Plot the best-fit model."""
         import matplotlib.cm as cm
         import matplotlib.pyplot as plt
-        if ax is None:
-            _, ax = plt.subplots()
-
+        ax = plt.subplots()[1]
         vkep = self._make_model(params) * 1e-3
         if residual:
             vkep -= self.data
@@ -495,12 +487,7 @@ class rotationmap:
         else:
             cb.set_label(r'${\rm  v_{Kep} \quad (km\,s^{-1})}$',
                          rotation=270, labelpad=15)
-        ax.set_aspect(1)
-        ax.grid(ls=':', color='k', alpha=0.3)
-        ax.set_xlim(self.xaxis.max(), self.xaxis.min())
-        ax.set_ylim(self.yaxis.min(), self.yaxis.max())
-        ax.set_xlabel('Offset (arcsec)')
-        ax.set_ylabel('Offset (arcsec)')
+        self._gentrify_plot(ax)
 
     @staticmethod
     def plot_walkers(samples, nburnin=None, labels=None):
@@ -516,7 +503,7 @@ class rotationmap:
 
         # Cycle through the plots.
         for s, sample in enumerate(samples):
-            fig, ax = plt.subplots()
+            _, ax = plt.subplots()
             for walker in sample.T:
                 ax.plot(walker, alpha=0.1, color='k')
             ax.set_xlabel('Steps')
@@ -532,3 +519,12 @@ class rotationmap:
         quantiles = [0.16, 0.5, 0.84] if quantiles is None else quantiles
         corner.corner(samples, labels=labels, title_fmt='.4f',
                       quantiles=quantiles, show_titles=True)
+
+    def _gentrify_plot(self, ax):
+        """Gentrify the plot."""
+        ax.set_aspect(1)
+        ax.grid(ls=':', color='k', alpha=0.3)
+        ax.set_xlim(self.xaxis.max(), self.xaxis.min())
+        ax.set_ylim(self.yaxis.min(), self.yaxis.max())
+        ax.set_xlabel('Offset (arcsec)')
+        ax.set_ylabel('Offset (arcsec)')
