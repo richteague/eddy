@@ -24,18 +24,24 @@ TODO:
 import numpy as np
 from astropy.io import fits
 import scipy.constants as sc
+import warnings
+
+warnings.filterwarnings("ignore")
 
 
 class rotationmap:
+
+    msun = 1.988e30
+    fwhm = 2. * np.sqrt(2 * np.log(2))
 
     def __init__(self, path, uncertainty=None, clip=None, downsample=None):
         """Initialize the class."""
 
         # Read in the data and position axes.
-        self.data = fits.getdata(path)
+        self.data = np.squeeze(fits.getdata(path))
         self.header = fits.getheader(path)
         if uncertainty is not None:
-            self.error = fits.getdata(uncertainty)
+            self.error = np.squeeze(fits.getdata(uncertainty))
         else:
             print("No uncertainties found, assuming uncertainties of 10%.")
             self.error = 0.1 * self.data
@@ -55,6 +61,7 @@ class rotationmap:
             self._clip_cube(clip)
         if downsample is not None:
             self._downsample_cube(downsample)
+            self.dpix = abs(np.diff(self.xaxis)).mean()
         self.mask = np.isfinite(self.data)
 
         # Estimate the systemic velocity.
@@ -146,6 +153,12 @@ class rotationmap:
                                     tilt=temp['tilt'], r_min=r_min,
                                     r_max=r_max)
 
+        # Check what the parameters are.
+        labels = rotationmap._get_labels(params)
+        if len(labels) != len(p0):
+            raise ValueError("Mismatch in labels and p0. Check for integers.")
+        print("Assuming:\n\tp0 = [%s]." % (', '.join(labels)))
+
         # Run an initial optimization using scipy.minimize. Recalculate the
         # inverse variance mask.
         if optimize:
@@ -163,14 +176,9 @@ class rotationmap:
         # Make sure all starting positions are valid.
         # COMING SOON.
 
-        labels = rotationmap._get_labels(params)
-        if len(labels) != len(p0):
-            raise ValueError("Mismatch in labels and p0. Check for integers.")
-        print("Assuming p0 = [%s]." % (', '.join(labels)))
-
         # Set up and run the MCMC.
         ndim = len(p0)
-        nwalkers = 2 * ndim if nwalkers is None else nwalkers
+        nwalkers = 4 * ndim if nwalkers is None else nwalkers
         p0 = rotationmap._random_p0(p0, scatter, nwalkers)
 
         sampler = emcee.EnsembleSampler(nwalkers, ndim, self._ln_probability,
@@ -215,7 +223,7 @@ class rotationmap:
         else:
             print("WARNING: scipy.optimize did not converge.")
             print("Starting positions:")
-        print(['%.4e' % t for t in theta])
+        print('\tp0 =', ['%.4e' % t for t in theta])
         return theta
 
     @staticmethod
@@ -265,6 +273,10 @@ class rotationmap:
     def _calc_ivar(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
                    tilt=0.0, r_min=0.0, r_max=1e5):
         """Calculate the inverse variance including radius mask."""
+        try:
+            assert self.error.shape == self.data.shape
+        except AttributeError:
+            self.error = self.error * np.ones(self.data.shape)
         rvals = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA,
                                  z0=z0, psi=psi, tilt=tilt)[0]
         mask = np.logical_and(rvals >= r_min, rvals <= r_max)
@@ -451,7 +463,7 @@ class rotationmap:
                                   tilt=tilt, frame='polar')
         rvals = coords[0] * sc.au * dist
         zvals = coords[2] * sc.au * dist
-        vkep = sc.G * mstar * 1.988e30 * np.power(rvals, 2.0)
+        vkep = sc.G * mstar * self.msun * np.power(rvals, 2.0)
         vkep = np.sqrt(vkep * np.power(np.hypot(rvals, zvals), -3.0))
         return vkep * np.sin(np.radians(inc)) * np.cos(coords[1]) + vlsr
 
@@ -494,23 +506,16 @@ class rotationmap:
         a_len = self.header['naxis%d' % a]
         a_del = self.header['cdelt%d' % a]
         a_pix = self.header['crpix%d' % a]
-        return 3600 * ((np.arange(a_len) - a_pix + 0.5) * a_del)
+        return 3600 * ((np.arange(a_len) - a_pix + 1.5) * a_del)
 
     # -- Convolution functions. -- #
 
-    def _beamkernel(self, bmaj=None, bmin=None, bpa=None, nbeams=1.0):
+    def _beamkernel(self):
         """Returns the 2D Gaussian kernel for convolution."""
         from astropy.convolution import Kernel
-        if bmaj is None and bmin is None and bpa is None:
-            bmaj = self.bmaj
-            bmin = self.bmin
-            bpa = self.bpa
-        bmaj /= self.dpix * self.fwhm
-        bmin /= self.dpix * self.fwhm
-        bpa = np.radians(bpa)
-        if nbeams > 1.0:
-            bmin *= nbeams
-            bmaj *= nbeams
+        bmaj = self.bmaj / self.dpix / self.fwhm
+        bmin = self.bmin / self.dpix / self.fwhm
+        bpa = np.radians(self.bpa)
         return Kernel(self._gaussian2D(bmin, bmaj, bpa + 90.).T)
 
     def _gaussian2D(self, dx, dy, PA=0.0):
@@ -624,10 +629,14 @@ class rotationmap:
 
     def _gentrify_plot(self, ax):
         """Gentrify the plot."""
+        from matplotlib.ticker import MultipleLocator
         ax.set_aspect(1)
         ax.grid(ls=':', color='k', alpha=0.3)
+        ax.tick_params(which='both', right=True, top=True)
         ax.set_xlim(self.xaxis.max(), self.xaxis.min())
         ax.set_ylim(self.yaxis.min(), self.yaxis.max())
+        ax.xaxis.set_major_locator(MultipleLocator(1.0))
+        ax.yaxis.set_major_locator(MultipleLocator(1.0))
         ax.set_xlabel('Offset (arcsec)')
         ax.set_ylabel('Offset (arcsec)')
         if self.bmaj is not None:
