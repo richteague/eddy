@@ -157,7 +157,7 @@ class rotationmap:
         labels = rotationmap._get_labels(params)
         if len(labels) != len(p0):
             raise ValueError("Mismatch in labels and p0. Check for integers.")
-        print("Assuming:\n\tp0 = [%s]." % (', '.join(labels)))
+        print("Assuming\n\tp0 = [%s]." % (', '.join(labels)))
 
         # Run an initial optimization using scipy.minimize. Recalculate the
         # inverse variance mask.

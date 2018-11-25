@@ -12,6 +12,8 @@ functions. The available methods are:
                 if using CASA's immoments). Will return the peak value and the
                 channel.
 
+'first'      -  Traditional intensity weighted average velocity. Will only
+                return the calculated line center.
 """
 
 import argparse
@@ -64,6 +66,12 @@ def _read_spectral_axis(header):
     return header['crval3'] + specax * header['cdelt3']
 
 
+def _estimate_RMS(data, N=5):
+    """Return the estimated RMS in the first and last N channels."""
+    rms = np.nanstd([data[:int(N)], data[-int(N):]])
+    return rms * np.ones(data[0].shape)
+
+
 def _save_array(original_path, new_path, array):
     """Use the header from `original_path` to save a new FITS file."""
     header = fits.getheader(original_path)
@@ -103,8 +111,8 @@ def collapse_quadratic(velax, data, dV=None, rms=None, N=5):
     Returns:
         v0 (ndarray): Line center in the same units as velax.
         dv0 (ndarray): Uncertainty on v0 in the same units as velax.
-        Fnu (ndarray): Leak peak in the same units as data.
-        dFnu (ndarray): Uncertainty in Fnu in the same units as data.
+        Fnu (ndarray): Line peak in the same units as the data.
+        dFnu (ndarray): Uncertainty in Fnu in the same units as the data.
     """
 
     try:
@@ -118,7 +126,7 @@ def collapse_quadratic(velax, data, dV=None, rms=None, N=5):
 
     # Estimate the uncertainty.
     if rms is None:
-        rms = np.nanstd([data[:int(N)], data[-int(N):]])
+        rms = _estimate_RMS(data, N=N)
 
     # Convert linewidth units.
     chan = np.diff(velax).mean()
@@ -126,6 +134,93 @@ def collapse_quadratic(velax, data, dV=None, rms=None, N=5):
         dV /= chan
 
     return quadratic(data, x0=velax[0], dx=chan, uncertainty=rms, linewidth=dV)
+
+
+def collapse_maximum(velax, data, return_peak=True, rms=None, N=5):
+    """
+    Coallapses the cube by taking the velocity of the maximum intensity pixel
+    along the spectral axis. This is the 'ninth' moment in CASA's immoments
+    task. Can additionally return the peak value ('eighth moment').
+
+    Args:
+        velax (ndarray): Velocity axis of the cube.
+        data (ndarray): Flux densities or brightness temperature array. Assumes
+            that the first axis is the velocity axis.
+        return_peak (Optional[bool]): Also return the peak value.
+        rms (Optional[float]): Noise per pixel. If none is specified, will be
+            calculated from the first and last N channels.
+        N (Optional[int]): Number of channels to use in the estimation of the
+            noise.
+
+    Returns:
+        v0 (ndarray): Line center in the same units as velax.
+        dv0 (ndarray): Uncertainty on v0 in the same units as velax. Will be
+            the channel width.
+        Fnu (ndarray): If return_peak=True. Line peak in the same units as
+            the data.
+        dFnu (ndarray): If return_peak=True. Uncertainty in Fnu in the same
+            units as the data. Will be the RMS calculate from the first and
+            last channels.
+    """
+    v0 = np.take(velax, np.argmax(data, axis=0))
+    dv0 = np.ones(v0.shape) * abs(np.diff(velax).mean())
+    if not return_peak:
+        return v0, dv0, None, None
+    Fnu = np.nanmax(data, axis=0)
+    if rms is None:
+        dFnu = _estimate_RMS(data, N=N)
+    else:
+        dFnu = rms * np.ones(v0.shape)
+    return v0, dv0, Fnu, dFnu
+
+
+def collapse_first(velax, data, clip=None, rms=None, N=5, mask=None):
+    """
+    Collapses the cube using the intensity weighted average velocity (or first
+    moment map).
+
+    Args:
+        velax (ndarray): Velocity axis of the cube.
+        data (ndarray): Flux densities or brightness temperature array. Assumes
+            that the first axis is the velocity axis.
+        clip (Optional[float]): Clip any pixels below this SNR level.
+        rms (Optional[float]): Noise per pixel. If none is specified, will be
+            calculated from the first and last N channels.
+        N (Optional[int]): Number of channels to use in the estimation of the
+            noise.
+        mask (Optional[ndarray]): A boolean or integeter array masking certain
+            pixels to be excluded in the fitting. Can either be a full 3D mask,
+            a 2D channel mask, or a 1D spectrum mask.
+
+    Returns:
+        v0 (ndarray): Line center in the same units as velax.
+    """
+
+    # Calculate the weights.
+    weight_noise = 1e-20 * np.random.randn(data.size).reshape(data.shape)
+    weights = np.where(np.isfinite(data), data, weight_noise)
+
+    # Apply the SNR clipping.
+    if clip is not None:
+        Fnu, dFnu = collapse_maximum(velax, data, return_peak=True, N=N)[2:]
+        if rms is not None:
+            dFnu = rms * np.ones(Fnu.shape)
+        weights = np.where(Fnu / dFnu >= clip, weights, weight_noise)
+
+    # Mask the data.
+    if mask is not None:
+        if mask.shape == data.shape:
+            weights = np.where(mask, weights, weight_noise)
+        elif mask.shape == data[0].shape:
+            weights = np.where(mask[None, :, :], weights, weight_noise)
+        elif mask.shape == velax.shape:
+            weights = np.where(mask[:, None, None], weights, weight_noise)
+        else:
+            raise ValueError("Unknown shape for the mask.")
+
+    # Calculate the intensity weighted average velocity.
+    velax_cube = np.ones(data.shape) * velax[:, None, None]
+    return np.average(velax_cube, weights=weights, axis=0)
 
 
 if __name__ == '__main__':
@@ -146,41 +241,58 @@ if __name__ == '__main__':
 
     # Read in the cube [Jy/beam] and velocity axis [m/s].
     data, velax = _get_cube(args.path)
+    v0, dv0, Fnu, dFnu = None, None, None, None
 
-    # Collapse the cube.
+    # Collapse the cube with the approrpriate method.
+
     if args.method.lower() == 'quadratic':
-
-        # Calculate values.
-        if not args.silent:
-            print("Calculating maps...")
         v0, dv0, Fnu, dFnu = collapse_quadratic(velax, data)
-
-        # Mask the data.
-        if args.clip is not None:
-
-            mask = abs(1e-10 * np.random.randn(dFnu.size).reshape(dFnu.shape))
-            mask = np.where(np.logical_or(dFnu == 0.0, np.isnan(dFnu)),
-                            mask, dFnu)
-            mask = np.where(np.isfinite(Fnu), Fnu, 0.0) / mask >= args.clip
-
-            v0 = np.where(mask, v0, args.fill)
-            dv0 = np.where(mask, dv0, args.fill)
-            Fnu = np.where(mask, Fnu, args.fill)
-            dFnu = np.where(mask, dFnu, args.fill)
-
-        # Save the values.
-        if not args.silent:
-            print("Saving maps...")
-        _save_array(args.path, args.path.replace('.fits', '_v0.fits'), v0)
-        _save_array(args.path, args.path.replace('.fits', '_dv0.fits'), dv0)
-        _save_array(args.path, args.path.replace('.fits', '_Fnu.fits'), Fnu)
-        _save_array(args.path, args.path.replace('.fits', '_dFnu.fits'), dFnu)
-
-    if args.method.lower() == 'maximum':
-        raise NotImplementedError("Still working on this.")
-
-    if args.method.lower() == 'first':
-        raise NotImplementedError("Still working on this.")
-
+    elif args.method.lower() == 'maximum':
+        v0, dv0, Fnu, dFnu = collapse_maximum(velax, data, return_peak=True)
+    elif args.method.lower() == 'first':
+        v0 = collapse_first(velax, data, clip=2.0)
     else:
         raise ValueError("Unknown method.")
+
+    # Mask the data. If no uncertainties are found for dFnu, use the RMS.
+    # TODO: only use the central 1/2 of the image to avoid primary beam issues.
+
+    if args.clip is not None:
+
+        if not args.silent:
+            print("Masking maps.")
+
+        if Fnu is None:
+            signal = collapse_maximum(velax, data, return_peak=True)[2]
+        else:
+            signal = Fnu
+        if dFnu is None:
+            noise = collapse_maximum(velax, data, return_peak=True)[3]
+        else:
+            noise = dFnu
+
+        rndm = abs(1e-10 * np.random.randn(noise.size).reshape(noise.shape))
+        mask = np.where(noise != 0.0, noise, rndm)
+        mask = np.where(np.isfinite(mask), mask, rndm)
+        mask = np.where(np.isfinite(signal), signal, 0.0) / mask >= args.clip
+
+        v0 = np.where(mask, v0, args.fill)
+        if dv0 is not None:
+            dv0 = np.where(mask, dv0, args.fill)
+        if Fnu is not None:
+            Fnu = np.where(mask, Fnu, args.fill)
+        if dFnu is not None:
+            dFnu = np.where(mask, dFnu, args.fill)
+
+    # Save the files.
+
+    if not args.silent:
+        print("Saving maps.")
+    if v0 is not None:
+        _save_array(args.path, args.path.replace('.fits', '_v0.fits'), v0)
+    if dv0 is not None:
+        _save_array(args.path, args.path.replace('.fits', '_dv0.fits'), dv0)
+    if Fnu is not None:
+        _save_array(args.path, args.path.replace('.fits', '_Fnu.fits'), Fnu)
+    if dFnu is not None:
+        _save_array(args.path, args.path.replace('.fits', '_dFnu.fits'), dFnu)
