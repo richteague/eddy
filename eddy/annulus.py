@@ -5,12 +5,13 @@ import numpy as np
 from scipy.stats import binned_statistic
 from scipy.optimize import curve_fit
 from scipy.optimize import minimize_scalar
+from scipy.interpolate import interp1d
 
 
 class ensemble(object):
 
     def __init__(self, spectra, theta, velax, suppress_warnings=True,
-                 remove_empty=True):
+                 remove_empty=True, sort_spectra=True):
         """Initialize the class."""
 
         # Suppress warnings.
@@ -21,11 +22,21 @@ class ensemble(object):
         # Read in the spectra and remove empty values.
         self.theta = theta
         self.spectra = spectra
+
+        # Sort the spectra.
+        if sort_spectra:
+            idxs = np.argsort(self.theta)
+            self.spectra = self.spectra[idxs]
+            self.theta = self.theta[idxs]
+
+        # Remove empty pixels.
         if remove_empty:
             idxs = np.sum(spectra, axis=-1) > 0.0
             self.theta = self.theta[idxs]
             self.spectra = self.spectra[idxs]
-        self.theta_deg = np.degrees(theta)
+
+        # Easier to use variables.
+        self.theta_deg = np.degrees(theta) % 360.
         self.spectra_flat = spectra.flatten()
 
         # Check there's actually spectra.
@@ -88,6 +99,8 @@ class ensemble(object):
         if vref is not None and p0 is not None:
             print("WARNING: Initial value of p0 (%.2f) " % (p0[0]) +
                   "used in place of vref (%.2f)." % (vref))
+        if not isinstance(vref, (int, float)):
+            vref = vref[0]
         p0 = self._guess_parameters_GP(vref) if p0 is None else p0
         if len(p0) != 4:
             raise ValueError('Incorrect length of p0.')
@@ -98,7 +111,7 @@ class ensemble(object):
             p0 = self._optimize_p0(p0, resample=resample, **kwargs)
         p0 = ensemble._randomize_p0(p0, nwalkers, scatter)
         if np.any(np.isnan(p0)):
-            raise ValueError('NaNs in the p0 array.')
+            raise ValueError("WARNING: NaNs in the p0 array.")
 
         # Set up emcee.
         sampler = emcee.EnsembleSampler(nwalkers, 4, self._lnprobability,
@@ -134,10 +147,14 @@ class ensemble(object):
                            args=(resample), **kwargs)
             if not res.success:
                 print("WARNING: scipy.optimize.minimze did not converge.")
-            else:
+            elif np.isfinite(ensemble._lnprior(res.x, p0[0])):
                 p0 = res.x
-        else:
+            else:
+                print("WARNING: optimized parameters inconsistent with prior.")
+        elif np.isfinite(ensemble._lnprior(res.x, p0[0])):
             p0 = res.x
+        else:
+            print("WARNING: optimized parameters inconsistent with prior.")
         return p0
 
     def _guess_parameters_GP(self, vref, fit=True):
@@ -177,10 +194,7 @@ class ensemble(object):
     def _get_masked_spectra(self, theta, resample=True):
         """Return the masked spectra for fitting."""
         vrot = theta[0]
-        if resample:
-            x, y = self.deprojected_spectrum(vrot)
-        else:
-            x, y = self.deprojected_spectra(vrot)
+        x, y = self.deprojected_spectrum(vrot, resample=resample)
         mask = np.logical_and(x >= self.velax_mask[0], x <= self.velax_mask[1])
         return x[mask], y[mask]
 
@@ -264,10 +278,8 @@ class ensemble(object):
 
     def get_deprojected_width(self, vrot, resample=True):
         """Return the spectrum from a Gaussian fit."""
+        x, y = self.deprojected_spectrum(vrot, resample=resample)
         if resample:
-            x, y = self.deprojected_spectrum(vrot)
-        else:
-            x, y = self.deprojected_spectra(vrot, sort=True)
             mask = np.logical_and(x >= self.velax[0], x <= self.velax[-1])
             x, y = x[mask], y[mask]
         return ensemble._get_gaussian_width(y, x)
@@ -291,27 +303,37 @@ class ensemble(object):
         """Simple harmonic oscillator."""
         return A * np.cos(x) + y0
 
+    @staticmethod
+    def _SHOb(x, A, y0, dx):
+        """Simple harmonic oscillator with offset."""
+        return A * np.cos(x + dx) + y0
+
     # -- Deprojection Functions -- #
 
-    def deprojected_spectra(self, vrot, sort=True):
-        """Returns (x, y) of all deprojected points."""
+    def deprojected_spectra(self, vrot):
+        """Returns (x, y) of all deprojected points as an ensemble."""
+        spectra = []
+        for theta, spectrum in zip(self.theta, self.spectra):
+            shifted = interp1d(self.velax - vrot * np.cos(theta), spectrum,
+                               bounds_error=False, fill_value=np.nan)
+            spectra += [shifted(self.velax)]
+        return np.squeeze(spectra)
+
+    def deprojected_spectrum(self, vrot, resample=True):
+        """Returns (x, y) of collapsed deprojected spectrum."""
         vpnts = self.velax[None, :] - vrot * np.cos(self.theta)[:, None]
         vpnts = vpnts.flatten()
-        if not sort:
-            return vpnts, self.spectra_flat
         idxs = np.argsort(vpnts)
-        return vpnts[idxs], self.spectra_flat[idxs]
-
-    def deprojected_spectrum(self, vrot):
-        """Returns (x, y) of deprojected and binned spectrum."""
-        vpnts, spnts = self.deprojected_spectra(vrot, sort=True)
+        vpnts, spnts = vpnts[idxs], self.spectra_flat[idxs]
+        if not resample:
+            return vpnts, spnts
         spectrum = binned_statistic(vpnts, spnts,
                                     statistic='mean',
                                     bins=self.velax.size,
                                     range=self.velax_range)[0]
         return self.velax, spectrum
 
-    def guess_parameters(self, fit=True):
+    def guess_parameters(self, fit=True, fix_theta=True):
         """Guess vrot and vlsr from the spectra.."""
         vpeaks = np.take(self.velax, np.argmax(self.spectra, axis=1))
         vrot = 0.5 * (np.max(vpeaks) - np.min(vpeaks))
@@ -319,8 +341,12 @@ class ensemble(object):
         if not fit:
             return vrot, vlsr
         try:
-            return curve_fit(ensemble._SHO, self.theta, vpeaks,
-                             p0=[vrot, vlsr], maxfev=10000)[0]
+            if fix_theta:
+                return curve_fit(ensemble._SHO, self.theta, vpeaks,
+                                 p0=[vrot, vlsr], maxfev=10000)[0]
+            else:
+                return curve_fit(ensemble._SHOb, self.theta, vpeaks,
+                                 p0=[vrot, vlsr, 0.0], maxfev=10000)[0]
         except Exception:
             return vrot, vlsr
 
@@ -328,14 +354,44 @@ class ensemble(object):
 
     def plot_spectra(self, ax=None):
         """Plot all the spectra."""
-        import matplotlib.pyplot as plt
-        if ax is None:
-            _, ax = plt.subplots()
+        ax = ensemble._make_axes(ax)
         for spectrum in self.spectra:
             ax.step(self.velax, spectrum, where='mid', color='k')
         ax.set_xlabel('Velocity')
         ax.set_ylabel('Intensity')
         ax.set_xlim(self.velax[0], self.velax[-1])
+        return ax
+
+    def plot_river(self, vrot=None, ax=None, xlims=None, ylims=None, max=True):
+        """Plot a river plot."""
+        if vrot is None:
+            toplot = self.spectra
+        else:
+            toplot = self.deprojected_spectra(vrot)
+        toplot /= np.nanmax(toplot, axis=1)[:, None]
+        toplot = np.where(np.isnan(toplot), 0.0, toplot)
+        ax = ensemble._make_axes(ax)
+        ax.imshow(toplot, origin='lower', interpolation='nearest',
+                  aspect='auto', vmin=0.0, vmax=1.0,
+                  extent=[self.velax.min(), self.velax.max(),
+                          self.theta.min(), self.theta.max()])
+        if max:
+            ax.errorbar(np.take(self.velax, np.argmax(toplot, axis=1)),
+                        self.theta, color='k', fmt='o', mew=0.0, ms=2)
+        if xlims is not None:
+            ax.set_xlim(xlims[0], xlims[1])
+        if ylims is not None:
+            ax.set_ylim(ylims[0], ylims[1])
+        ax.set_xlabel(r'${\rm Velocity \, (m\,s^{-1})}$')
+        ax.set_ylabel(r'${\rm Polar \,\, Angle \quad (rad)}$')
+        return ax
+
+    @staticmethod
+    def _make_axes(ax):
+        """Make an axis to plot on."""
+        import matplotlib.pyplot as plt
+        if ax is None:
+            _, ax = plt.subplots()
         return ax
 
     @staticmethod

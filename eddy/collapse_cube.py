@@ -22,6 +22,32 @@ import scipy.constants as sc
 from astropy.io import fits
 
 
+def _H3(x):
+    """Fourth Hermite polynomial."""
+    return (np.sqrt(8.) * x**3 - np.sqrt(18.) * x) / np.sqrt(6.)
+
+
+def _H4(x):
+    """Fifth Hermite polynomial."""
+    return (16. * x**4 - 12. * x**2 + 3.) / np.sqrt(24.)
+
+
+def GH_gaussian(x, x0, dx, A, h3, h4):
+    """Gauss-Hermite expansion of a Gaussian."""
+    w = (x - x0) / dx
+    return A * np.exp(-w**2.) * (1.0 + h3 * _H3(w) + h4 * _H4(w))
+
+
+def gaussian(x, x0, dx, A):
+    """Gaussian function. dx is Doppler width."""
+    return A * np.exp(-np.power((x-x0)/dx, 2.0))
+
+
+def thick_gaussian(x, x0, dx, Tex, tau):
+    """Optically thick line profile. dx is Doppler width."""
+    return Tex * (1. - np.exp(-gaussian(x, x0, dx, tau)))
+
+
 def _get_cube(path):
     """Return the data and velocity axis from the cube."""
     return _get_data(path), _get_velax(path)
@@ -127,6 +153,7 @@ def collapse_quadratic(velax, data, dV=None, rms=None, N=5):
     # Estimate the uncertainty.
     if rms is None:
         rms = _estimate_RMS(data, N=N)
+        rms = np.nanmean(rms)
 
     # Convert linewidth units.
     chan = np.diff(velax).mean()
@@ -199,13 +226,17 @@ def collapse_first(velax, data, clip=None, rms=None, N=5, mask=None):
     # Calculate the weights.
     weight_noise = 1e-20 * np.random.randn(data.size).reshape(data.shape)
     weights = np.where(np.isfinite(data), data, weight_noise)
+    no_signal = np.sum(data, axis=0) > 0.0
+    weights = np.where(no_signal[None, :, :], weights, weight_noise)
 
     # Apply the SNR clipping.
     if clip is not None:
         Fnu, dFnu = collapse_maximum(velax, data, return_peak=True, N=N)[2:]
-        if rms is not None:
-            dFnu = rms * np.ones(Fnu.shape)
-        weights = np.where(Fnu / dFnu >= clip, weights, weight_noise)
+        if rms is None:
+            rms = _estimate_RMS(data, N=N)
+        dFnu = rms * np.ones(Fnu.shape)
+        snrmask = (Fnu / dFnu >= clip)
+        weights = np.where(snrmask, weights, weight_noise)
 
     # Mask the data.
     if mask is not None:
@@ -218,9 +249,155 @@ def collapse_first(velax, data, clip=None, rms=None, N=5, mask=None):
         else:
             raise ValueError("Unknown shape for the mask.")
 
-    # Calculate the intensity weighted average velocity.
+    # Calculate the intensity weighted average velocity. Apply the mask for
+    # regions with no signal in them, or clipped.
     velax_cube = np.ones(data.shape) * velax[:, None, None]
-    return np.average(velax_cube, weights=weights, axis=0)
+    v0 = np.average(velax_cube, weights=weights, axis=0)
+    mask = np.logical_and(no_signal, np.sum(weights) > 1e-10)
+    return np.where(mask, v0, np.nan)
+
+
+def collapse_gaussian(velax, data, clip=None, rms=None, N=5, thick=False):
+    """
+    Collapse the cube by fitting a Gaussian to the line profile. Make take a
+    while to fit for large cubes or if using the optically thick line profile.
+
+    Args:
+        velax (ndarray): Velocity axis of the cube.
+        data (ndarray): Flux density or brightness temperature array. Assumes
+            that the first axis is the velocity axis.
+        clip (Optional[flat]): Skips pixels which have a SNR less than this.
+        rms (Optional[float]): Noise per pixel. If none is specified, will be
+            calculated from the first and last N channels.
+        N (Optional[int]): Number of channels to use in the estimation of the
+            noise.
+        thick (Optional[bool]): Fit an optically thick Gaussian line profile
+            rather than just a single Gaussian component.
+
+    Returns:
+        popt (ndarray): If thick is False, returns the spatial maps of
+            [x0, dV, Tb]. Instead if thick is True, returns the spatial maps of
+            [x0, dV, Tex, tau].
+        copt (ndarray): The uncertainties, calculated from the diagonal of the
+            covariance matrix, for the returned values.
+    """
+
+    # Use scipy for the fitting.
+    from scipy.optimize import curve_fit
+
+    #  Estimate the starting positions.
+    v0, _, Tb, _ = collapse_quadratic(velax, data, rms=rms, N=N)
+    dV = np.trapz(data * velax[:, None, None], axis=0)
+    dV /= Tb * np.sqrt(np.pi)
+
+    # Calculate the signal to noise ratio of each pixel.
+    clip = clip if clip is not None else -100.0
+    rms = rms if rms is not None else _estimate_RMS(data, N).mean()
+    snr = Tb / rms
+    rms *= np.ones(velax.size)
+
+    # Fit the Gaussians, pixel by pixel. NaN as holder for no fit.
+    popt = np.zeros((4, data.shape[1], data.shape[2])) * np.nan
+    copt = np.zeros(popt.shape) * np.nan
+    ndim = 4 if thick else 3
+
+    # Define the bounds for fitting.
+    if thick:
+        bounds = ((velax.min(), 0., 0., 0.), (velax.max(), 1e4, 1e5, 10.))
+    else:
+        bounds = ((velax.min(), 0., 0.), (velax.max(), 1e4, 1e5))
+
+    # Loop through all the pixels in the image.
+    # TODO: include a progress bar if I'm feeling fancy.
+    for i in range(data.shape[1]):
+        for j in range(data.shape[2]):
+            if clip > snr[i, j]:
+                continue
+
+            # Initial parameters.
+            p0 = [v0[i, j], dV[i, j], Tb[i, j]]
+            if thick:
+                p0 += [1.0]
+
+            # Fit the pixels.
+            try:
+                if thick:
+                    p, c = curve_fit(thick_gaussian, velax, data[:, i, j],
+                                     p0=p0, sigma=rms, absolute_sigma=True,
+                                     maxfev=10000, bounds=bounds)
+                else:
+                    p, c = curve_fit(gaussian, velax, data[:, i, j], p0=p0,
+                                     sigma=rms, absolute_sigma=True,
+                                     maxfev=10000, bounds=bounds)
+                popt[:ndim, i, j] = p
+                copt[:ndim, i, j] = np.sqrt(np.diag(c))
+            except:
+                continue
+
+    return popt[:ndim], copt[:ndim]
+
+
+def collapse_gausshermite(velax, data, clip=None, rms=None, N=5):
+    """
+    Collapse the cube by fittingHermit expansion of a Gaussian to allow for a
+    parametrised skewness and kurtosis. Note that h3 and h4 are not exact
+    representations of these two but all for a more complex profile.
+
+    Args:
+        velax (ndarray): Velocity axis of the cube.
+        data (ndarray): Flux density or brightness temperature array. Assumes
+            that the first axis is the velocity axis.
+        clip (Optional[flat]): Skips pixels which have a SNR less than this.
+        rms (Optional[float]): Noise per pixel. If none is specified, will be
+            calculated from the first and last N channels.
+        N (Optional[int]): Number of channels to use in the estimation of the
+            noise.
+
+    Returns:
+        popt (ndarray): Returns the spatial map of [x0, dx, Tb, h3, h4].
+    """
+
+    # Use scipy for the fitting.
+    from scipy.optimize import curve_fit
+
+    #  Estimate the starting positions.
+    v0, _, Tb, _ = collapse_quadratic(velax, data, rms=rms, N=N)
+    dV = np.trapz(data * velax[:, None, None], axis=0)
+    dV /= Tb * np.sqrt(np.pi)
+
+    # Calculate the signal to noise ratio of each pixel.
+    clip = clip if clip is not None else -100.0
+    rms = rms if rms is not None else _estimate_RMS(data, N).mean()
+    snr = Tb / rms
+    rms *= np.ones(velax.size)
+
+    # Fit the Gaussians, pixel by pixel. NaN as holder for no fit.
+    popt = np.zeros((5, data.shape[1], data.shape[2])) * np.nan
+    copt = np.zeros(popt.shape) * np.nan
+    bounds = ((velax.min(), 0.0, 0.0, -1.0, -1.0),
+              (velax.max(), np.inf, np.inf, 1.0, 1.0))
+
+    # Loop through all the pixels in the image.
+    # TODO: include a progress bar if I'm feeling fancy.
+    for i in range(data.shape[1]):
+        for j in range(data.shape[2]):
+            if clip > snr[i, j]:
+                continue
+
+            # Initial parameters.
+            p0 = [v0[i, j], dV[i, j], Tb[i, j], 0.0, 0.0]
+
+            # Fit the pixels.
+            try:
+                p, c = curve_fit(GH_gaussian, velax, data[:, i, j], p0=p0,
+                                 sigma=rms, absolute_sigma=True, maxfev=10000,
+                                 bounds=bounds)
+                popt[:, i, j] = p
+                copt[:, i, j] = np.diag(c)
+            except:
+                continue
+
+    return popt, copt
 
 
 if __name__ == '__main__':

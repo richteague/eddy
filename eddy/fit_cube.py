@@ -157,7 +157,7 @@ class rotationmap:
         labels = rotationmap._get_labels(params)
         if len(labels) != len(p0):
             raise ValueError("Mismatch in labels and p0. Check for integers.")
-        print("Assuming\n\tp0 = [%s]." % (', '.join(labels)))
+        print("Assuming:\n\tp0 = [%s]." % (', '.join(labels)))
 
         # Run an initial optimization using scipy.minimize. Recalculate the
         # inverse variance mask.
@@ -475,7 +475,7 @@ class rotationmap:
                               psi=params['psi'], mstar=params['mstar'],
                               dist=params['dist'], tilt=params['tilt'])
         if params['beam']:
-            vkep = self._convolve_image(vkep, self._beamkernel())
+            vkep = rotationmap._convolve_image(vkep, self._beamkernel())
         return vkep
 
     # -- Helper functions for loading up the data. -- #
@@ -526,7 +526,8 @@ class rotationmap:
         k = np.power(x / dx, 2) + np.power(y / dy, 2)
         return np.exp(-0.5 * k) / 2. / np.pi / dx / dy
 
-    def _convolve_image(self, image, kernel, fast=True):
+    @staticmethod
+    def _convolve_image(image, kernel, fast=True):
         """Convolve the image with the provided kernel."""
         if fast:
             from astropy.convolution import convolve_fft
