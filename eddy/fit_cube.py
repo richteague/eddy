@@ -264,7 +264,7 @@ class rotationmap:
             return -np.inf
         if not 0.0 <= params['z0'] < 1.0:
             return -np.inf
-        if not 0.0 <= params['psi'] < 2.0:
+        if not 0.0 < params['psi'] < 2.0:
             return -np.inf
         if not -1.0 < params['tilt'] < 1.0:
             return -np.inf
@@ -412,8 +412,7 @@ class rotationmap:
         from scipy.interpolate import griddata
 
         # Deproject the pixels into cartesians coordinates.
-        params = self._verify_dictionary(params)
-        xpix, ypix, _ = self.disk_coords(x0=x0, y=y0, inc=inc, PA=PA, z0=z0,
+        xpix, ypix, _ = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0,
                                          psi=psi, tilt=tilt, frame='cartesian')
         xpix, ypix = xpix.flatten(), ypix.flatten()
         if image is not None:
@@ -473,7 +472,8 @@ class rotationmap:
         x_mid, y_mid = self._get_midplane_cart_coords(x0, y0, inc, PA)
         r_mid, t_mid = self._get_midplane_polar_coords(x0, y0, inc, PA)
         for _ in range(5):
-            y_tmp = y_mid - func(r_mid) * tilt * np.tan(np.radians(inc))
+            y_tmp = func(r_mid) * np.sign(tilt) * np.tan(np.radians(inc))
+            y_tmp = y_mid - y_tmp
             r_mid = np.hypot(y_tmp, x_mid)
             t_mid = np.arctan2(y_tmp, x_mid)
         return r_mid, t_mid
