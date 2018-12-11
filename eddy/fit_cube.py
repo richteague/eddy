@@ -82,7 +82,7 @@ class rotationmap:
     def fit_keplerian(self, p0, params, r_min=None, r_max=None, optimize=True,
                       nwalkers=None, nburnin=300, nsteps=100, scatter=1e-3,
                       plot_walkers=True, plot_corner=True, plot_bestfit=True,
-                      plot_residual=False, return_samples=False):
+                      plot_residual=True, return_samples=False):
         """
         Fit a Keplerian rotation profile to the data.
 
@@ -196,9 +196,9 @@ class rotationmap:
         if plot_corner:
             rotationmap.plot_corner(samples, labels)
         if plot_bestfit:
-            self.plot_bestfit(bestfit, ivar=self.ivar, residual=False)
+            self.plot_bestfit(bestfit, ivar=self.ivar)
         if plot_residual:
-            self.plot_bestfit(bestfit, ivar=self.ivar, residual=True)
+            self.plot_residual(bestfit, ivar=self.ivar)
 
         # Return the posterior distributions.
         if return_samples:
@@ -382,6 +382,60 @@ class rotationmap:
             c3 = func(c1)
         return c1, c2, c3
 
+    def deproject_image(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=1.0,
+                        tilt=0.0, image=None):
+        """
+        Deproject the image given the geometrical parameters. If no image is
+        given, will used the attached rotation map.
+
+        Args:
+            x0 (Optional[float]): Source right ascension offset (arcsec).
+            y0 (Optional[float]): Source declination offset (arcsec).
+            inc (Optional[float]): Source inclination (degrees).
+            PA (Optional[float]): Source position angle (degrees). Measured
+                between north and the red-shifted semi-major axis in an
+                easterly direction.
+            z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
+                To get the far side of the disk, make this number negative.
+            psi (Optional[float]): Flaring angle for the emission surface.
+            tilt (Optional[float]): Value between -1 and 1, positive values
+                result in the north side of the disk being closer to the
+                observer; negative values the south.
+            image (Optional[ndarray]): Image to deproject (must be the same
+                shape as the original velocity map). If non is specified then
+                it will default to the attached velocity map.
+        Returns:
+            vep (ndarray): Geometrically deprojected image on the attached x-
+                and y-axis.
+        """
+
+        from scipy.interpolate import griddata
+
+        # Deproject the pixels into cartesians coordinates.
+        params = self._verify_dictionary(params)
+        xpix, ypix, _ = self.disk_coords(x0=x0, y=y0, inc=inc, PA=PA, z0=z0,
+                                         psi=psi, tilt=tilt, frame='cartesian')
+        xpix, ypix = xpix.flatten(), ypix.flatten()
+        if image is not None:
+            dpix = image.flatten()
+        else:
+            dpix = self.data.flatten()
+        if xpix.shape != dpix.shape:
+            raise ValueError("Unknown shaped input image.")
+
+        # Deproject the mask.
+        isnan = griddata((xpix, ypix), np.where(self.mask, 1, 0).flatten(),
+                         (self.xaxis[None, :], self.yaxis[:, None]),
+                         method='nearest')
+
+        # Mask any NaN values and regrid the data.
+        mask = np.isfinite(dpix)
+        xpix, ypix, dpix = xpix[mask], ypix[mask], dpix[mask]
+        depr = griddata((xpix, ypix), dpix,
+                        (self.xaxis[None, :], self.yaxis[:, None]),
+                        method='linear')
+        return np.where(isnan, depr, np.nan)
+
     @staticmethod
     def _rotate_coords(x, y, PA):
         """Rotate (x, y) by PA [deg]."""
@@ -548,7 +602,7 @@ class rotationmap:
             levels = self.vlsr + np.linspace(-levels, levels, 30)
         im = ax.contourf(self.xaxis, self.yaxis, self.data, levels,
                          cmap=cm.RdBu_r, extend='both')
-        cb = plt.colorbar(im, pad=0.02, ticks=np.arange(-20, 20, 0.25))
+        cb = plt.colorbar(im, pad=0.02)
         cb.set_label(r'${\rm  v_{obs} \quad (km\,s^{-1})}$',
                      rotation=270, labelpad=15)
         if ivar is not None:
@@ -561,29 +615,34 @@ class rotationmap:
         import matplotlib.pyplot as plt
         ax = plt.subplots()[1]
         vkep = self._make_model(params) * 1e-3
-        if residual:
-            vkep -= self.data
         levels = np.where(self.ivar != 0.0, vkep, np.nan)
         levels = np.nanpercentile(levels, [2, 98])
-        if residual:
-            levels = max(abs(levels[0]), abs(levels[1]))
-            levels = np.array([-levels, levels])
-            ticks = None
-        else:
-            ticks = np.arange(-20, 20, 0.25)
         levels = np.linspace(levels[0], levels[1], 30)
-
         im = ax.contourf(self.xaxis, self.yaxis, vkep, levels,
                          cmap=cm.RdBu_r, extend='both')
         if ivar is not None:
             ax.contour(self.xaxis, self.yaxis, ivar, [0], colors='k')
-        cb = plt.colorbar(im, pad=0.02, ticks=ticks)
-        if residual:
-            cb.set_label(r'${\rm v_{obs} - v_{Kep} \quad (km\,s^{-1})}$',
-                         rotation=270, labelpad=15)
-        else:
-            cb.set_label(r'${\rm  v_{Kep} \quad (km\,s^{-1})}$',
-                         rotation=270, labelpad=15)
+        cb = plt.colorbar(im, pad=0.02)
+        cb.set_label(r'${\rm  v_{Kep} \quad (km\,s^{-1})}$',
+                     rotation=270, labelpad=15)
+        self._gentrify_plot(ax)
+
+    def plot_residual(self, params, ivar=None):
+        """Plot the residual from the provided model."""
+        import matplotlib.cm as cm
+        import matplotlib.pyplot as plt
+        ax = plt.subplots()[1]
+        vres = self.data - self._make_model(params) * 1e-3
+        levels = np.where(self.ivar != 0.0, vres, np.nan)
+        levels = np.nanpercentile(levels, [10, 90])
+        levels = np.linspace(levels[0], levels[1], 30)
+        im = ax.contourf(self.xaxis, self.yaxis, vres, levels,
+                         cmap=cm.RdBu_r, extend='both')
+        if ivar is not None:
+            ax.contour(self.xaxis, self.yaxis, ivar, [0], colors='k')
+        cb = plt.colorbar(im, pad=0.02)
+        cb.set_label(r'${\rm  v_{Obs} - v_{Kep} \quad (km\,s^{-1})}$',
+                     rotation=270, labelpad=15)
         self._gentrify_plot(ax)
 
     @staticmethod

@@ -393,7 +393,7 @@ def collapse_gausshermite(velax, data, clip=None, rms=None, N=5):
                                  sigma=rms, absolute_sigma=True, maxfev=10000,
                                  bounds=bounds)
                 popt[:, i, j] = p
-                copt[:, i, j] = np.diag(c)
+                copt[:, i, j] = np.sqrt(np.diag(c))
             except:
                 continue
 

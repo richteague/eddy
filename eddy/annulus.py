@@ -362,7 +362,8 @@ class ensemble(object):
         ax.set_xlim(self.velax[0], self.velax[-1])
         return ax
 
-    def plot_river(self, vrot=None, ax=None, xlims=None, ylims=None, max=True):
+    def plot_river(self, vrot=None, ax=None, xlims=None, ylims=None,
+                   plot_max=True):
         """Plot a river plot."""
         if vrot is None:
             toplot = self.spectra
@@ -375,7 +376,7 @@ class ensemble(object):
                   aspect='auto', vmin=0.0, vmax=1.0,
                   extent=[self.velax.min(), self.velax.max(),
                           self.theta.min(), self.theta.max()])
-        if max:
+        if plot_max:
             ax.errorbar(np.take(self.velax, np.argmax(toplot, axis=1)),
                         self.theta, color='k', fmt='o', mew=0.0, ms=2)
         if xlims is not None:
