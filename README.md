@@ -41,7 +41,7 @@ For this approach we exploit the fact that most disks are predominantly azimutha
 ---
 
 <p align='center'>
-  <img src="https://github.com/richteague/eddy/blob/master/Examples/Images/first_moment_and_spectra.png" width="713.2" height="383"><br/>
+  <img src="https://github.com/richteague/eddy/blob/master/docs/Images/first_moment_and_spectra.png" width="713.2" height="383"><br/>
   <b>Figure 1:</b> The left-hand panel shows the rotation pattern for a flared disk, with both near and far sides visible. The right hand panels show spectra taken from an annulus of constant radius. For an azimuthally symmetric disk these should be identical in terms of peak and width, however their centers will be offset due ot the projected component of the rotation.
 </p>
 
