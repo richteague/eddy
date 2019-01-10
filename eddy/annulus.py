@@ -31,7 +31,7 @@ class ensemble(object):
 
         # Remove empty pixels.
         if remove_empty:
-            idxs = np.sum(self.spectra, axis=-1) > 0.0
+            idxs = np.sum(spectra, axis=-1) > 0.0
             self.theta = self.theta[idxs]
             self.spectra = self.spectra[idxs]
 
@@ -148,7 +148,9 @@ class ensemble(object):
         parameters of the GP model, holding the rotation velocity constant,
         then, holding the GP hyperparameters constant, optimizing the rotation
         velocity, before optimizing everything together. This can be run
-        multiple times to iteratie to a global optimum.
+        multiple times to iteratie to a global optimum. We only update p0 if
+        both the minimization converged (res.success == True) and there is an
+        improvement in the likelihood.
 
         Args:
             p0 (ndarray): Initial guess of the starting positions.
@@ -163,15 +165,13 @@ class ensemble(object):
                 then p0 will not be updated. No warnings are given, however.
         """
         from scipy.optimize import minimize
+        verbose = kwargs.pop('verbose', False)
         kwargs['method'] = kwargs.get('method', 'L-BFGS-B')
         kwargs['options'] = {'maxiter': 100000, 'maxfun': 100000, 'ftol': 1e-4}
 
-        # Cycle through the required number of iterations. Only update p0 if
-        # both the minimization converged (res.success == True) and there is an
-        # improvement in the likelihood.
-
         nlnL = self._negative_lnlikelihood(p0, resample=resample)
 
+        # Cycle through the required number of iterations.
         for i in range(int(N)):
 
             # Define the bounds.
@@ -189,6 +189,9 @@ class ensemble(object):
                 if nlnL_temp < nlnL:
                     p0 = p0_temp
                     nlnL = nlnL_temp
+            else:
+                if verbose:
+                    print('Failed mimization: %s' % res.message)
 
             # Second, minimize vrot holding the hyper parameters constant.
             res = minimize(self._negative_lnlikelihood_vrot, x0=p0[0],
@@ -201,6 +204,9 @@ class ensemble(object):
                 if nlnL_temp < nlnL:
                     p0 = p0_temp
                     nlnL = nlnL_temp
+                else:
+                    if verbose:
+                        print('Failed mimization: %s' % res.message)
 
             # Final minimization with everything.
             res = minimize(self._negative_lnlikelihood, x0=p0,
@@ -212,6 +218,9 @@ class ensemble(object):
                 if nlnL_temp < nlnL:
                     p0 = p0_temp
                     nlnL = nlnL_temp
+            else:
+                if verbose:
+                    print('Failed mimization: %s' % res.message)
 
         return p0
 
@@ -302,6 +311,57 @@ class ensemble(object):
         if ~np.isfinite(ensemble._lnprior(theta, vref)):
             return -np.inf
         return self._lnlikelihood(theta, resample)
+
+    # -- Rotation Velocity by Maximizing SNR -- #
+
+    def get_vrot_SNR(self, vref=None, resample=False, signal='int',
+                     weight_SNR=True):
+        """Infer the rotation velocity by finding the rotation velocity which,
+        after shifting all spectra to a common velocity, results in the
+        maximum signal-to=noise ratio of the stacked profile. This is an
+        implementation of the method described in Yen et al. (2016, 2018).
+
+        Args:
+            vref (Optional[float]): Predicted rotation velocity, typically the
+                Keplerian velocity at that radius. Will be used as the starting
+                position for the minimization.
+            resample (Optional[bool]): Resample the shifted spectra by this
+                factor. For example, resample = 2 will shift and bin the
+                spectrum down to sampling rate twice that of the original data.
+            signal (Optional[str]): Method used to calculate the signal, either
+                'max' for the line peak or 'int' for the integrated intensity.
+            weight_SNR (Optional[bool]): If True and sigal == 'int', include
+                the Gaussian weighting used to calculate the SNR as decscribed
+                in Yen et al. (2018).
+
+        Returns:
+            vrot (float): Rotation velocity which maximies the width.
+        """
+        if signal not in ['max', 'int']:
+            raise ValueError("'signal' must be either 'max' or 'int'.")
+        vref = self.guess_parameters(fit=True)[0] if vref is None else vref
+        bounds = np.array([0.7, 1.3]) * vref
+        res = minimize_scalar(self.get_deprojected_nSNR, method='bounded',
+                              args=(resample, signal, weight_SNR),
+                              bounds=bounds)
+        return res.x if res.success else np.nan
+
+    def get_deprojected_nSNR(self, vrot, resample=False, signal='int',
+                             weighted_SNR=True):
+        """Return the negative SNR of the deprojected spectrum."""
+        x, y = self.deprojected_spectrum(vrot, resample=resample)
+        x0, dx, A = ensemble._fit_gaussian(x, y)
+        noise = np.std(x[(x - x0) / dx > 3.0])  # Check: noise will vary.
+        if signal == 'max':
+            SNR = A / noise
+        else:
+            if weighted_SNR:
+                w = ensemble._gaussian(x, x0, dx, (np.sqrt(np.pi) * dx)**-1)
+            else:
+                w = np.ones(x.size)
+            mask = (x - x0) / dx <= 1.0
+            SNR = np.trapz((y * w)[mask], x=x[mask])
+        return -SNR
 
     # -- Rotation Velocity by Minimizing Linewidth -- #
 
@@ -418,12 +478,12 @@ class ensemble(object):
 
     def deprojected_spectrum_maximum(self, resample=False, method='quadratic'):
         """Deprojects data such that their max values are aligned."""
-        vmax = self.peak_velocities(method=method)
+        vmax = self.line_centroids(method=method)
         vpnts = np.array([self.velax - dv for dv in vmax - np.median(vmax)])
         vpnts, spnts = self._order_spectra(vpnts=vpnts.flatten())
         return self._resample_spectra(vpnts, spnts, resample=resample)
 
-    def peak_velocities(self, method='quadratic'):
+    def line_centroids(self, method='quadratic'):
         """
         Return the velocities of the peak pixels.
 
@@ -473,7 +533,7 @@ class ensemble(object):
 
     def guess_parameters(self, fit=True, fix_theta=True, method='quadratic'):
         """Guess vrot and vlsr from the spectra.."""
-        vpeaks = self.peak_velocities(method=method)
+        vpeaks = self.line_centroids(method=method)
         vrot = 0.5 * (np.max(vpeaks) - np.min(vpeaks))
         vlsr = np.mean(vpeaks)
         if not fit:
@@ -488,6 +548,51 @@ class ensemble(object):
         except Exception:
             return vrot, vlsr
 
+    # -- River Functions -- #
+
+    def _grid_river(self, tgrid=None, vgrid=None, spnts=None, **kwargs):
+        """Grid the data to plot as a river."""
+        from scipy.interpolate import griddata
+        if tgrid is None:
+            tgrid = np.linspace(-np.pi, np.pi, self.theta.size)
+        if vgrid is None:
+            vgrid = self.velax.copy()
+        if spnts is None:
+            spnts = self.spectra_flat
+        vpnts = (self.velax[None, :] * np.ones(self.spectra.shape)).flatten()
+        tpnts = (self.theta[:, None] * np.ones(self.spectra.shape)).flatten()
+        sgrid = griddata((vpnts, tpnts), spnts.flatten(),
+                         (vgrid[None, :], tgrid[:, None]), **kwargs)
+        return vgrid, tgrid, sgrid
+
+    def plot_river(self, vrot=None, ax=None, tgrid=None, vgrid=None,
+                   xlims=None, ylims=None, normalize=True, plot_max=True):
+        """Make a river plot."""
+        if vrot is None:
+            toplot = self.spectra
+        else:
+            toplot = self.deprojected_spectra(vrot)
+        if normalize:
+            toplot /= np.nanmax(toplot, axis=1)[:, None]
+        toplot = np.where(np.isnan(toplot), 0.0, toplot)
+        vgrid, tgrid, sgrid = self._grid_river(spnts=toplot, tgrid=tgrid,
+                                               vgrid=vgrid)
+
+        ax = ensemble._make_axes(ax)
+        ax.imshow(toplot, origin='lower', interpolation='nearest',
+                  aspect='auto', vmin=0.0, vmax=1.0,
+                  extent=[vgrid[0], vgrid[-1], tgrid[0], tgrid[-1]])
+        if plot_max:
+            ax.errorbar(np.take(vgrid, np.argmax(toplot, axis=1)),
+                        self.theta, color='k', fmt='o', mew=0.0, ms=2)
+        if xlims is not None:
+            ax.set_xlim(xlims[0], xlims[1])
+        if ylims is not None:
+            ax.set_ylim(ylims[0], ylims[1])
+        ax.set_xlabel(r'${\rm Velocity \quad (m\,s^{-1})}$')
+        ax.set_ylabel(r'${\rm Polar \,\, Angle \quad (rad)}$')
+        return ax
+
     # -- Plotting Functions -- #
 
     def plot_spectra(self, ax=None):
@@ -498,32 +603,6 @@ class ensemble(object):
         ax.set_xlabel('Velocity')
         ax.set_ylabel('Intensity')
         ax.set_xlim(self.velax[0], self.velax[-1])
-        return ax
-
-    def plot_river(self, vrot=None, ax=None, xlims=None, ylims=None,
-                   plot_max=True):
-        """Plot a river plot."""
-        raise NotImplementedError("No. Not now.")
-        if vrot is None:
-            toplot = self.spectra
-        else:
-            toplot = self.deprojected_spectra(vrot)
-        toplot /= np.nanmax(toplot, axis=1)[:, None]
-        toplot = np.where(np.isnan(toplot), 0.0, toplot)
-        ax = ensemble._make_axes(ax)
-        ax.imshow(toplot, origin='lower', interpolation='nearest',
-                  aspect='auto', vmin=0.0, vmax=1.0,
-                  extent=[self.velax.min(), self.velax.max(),
-                          self.theta.min(), self.theta.max()])
-        if plot_max:
-            ax.errorbar(np.take(self.velax, np.argmax(toplot, axis=1)),
-                        self.theta, color='k', fmt='o', mew=0.0, ms=2)
-        if xlims is not None:
-            ax.set_xlim(xlims[0], xlims[1])
-        if ylims is not None:
-            ax.set_ylim(ylims[0], ylims[1])
-        ax.set_xlabel(r'${\rm Velocity \, (m\,s^{-1})}$')
-        ax.set_ylabel(r'${\rm Polar \,\, Angle \quad (rad)}$')
         return ax
 
     @staticmethod

@@ -3,3 +3,4 @@ __pycache__/
 /eddy.egg-info/
 .DS_Store
 .git*
+docs/.DS_Store
