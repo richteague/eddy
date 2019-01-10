@@ -556,7 +556,7 @@ class ensemble(object):
         if tgrid is None:
             tgrid = np.linspace(-np.pi, np.pi, self.theta.size)
         if vgrid is None:
-            vgrid = self.velax.copy()
+            vgrid = self.velax
         if spnts is None:
             spnts = self.spectra_flat
         vpnts = (self.velax[None, :] * np.ones(self.spectra.shape)).flatten()
@@ -575,9 +575,8 @@ class ensemble(object):
         if normalize:
             toplot /= np.nanmax(toplot, axis=1)[:, None]
         toplot = np.where(np.isnan(toplot), 0.0, toplot)
-        vgrid, tgrid, sgrid = self._grid_river(spnts=toplot, tgrid=tgrid,
-                                               vgrid=vgrid)
-
+        grids = self._grid_river(spnts=toplot, tgrid=tgrid, vgrid=vgrid)
+        vgrid, tgrid, sgrid = grids
         ax = ensemble._make_axes(ax)
         ax.imshow(toplot, origin='lower', interpolation='nearest',
                   aspect='auto', vmin=0.0, vmax=1.0,
