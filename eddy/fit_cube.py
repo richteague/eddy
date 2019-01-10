@@ -1,10 +1,12 @@
 """
-Class to load up a velocity map and fit a Keplerian profile to it. The main
-functions of interest are:
+Class to load up a velocity map and associated uncertainties and then fit a
+Keplerian profile to it, allowing for constraints on the flaring of the disk.
+
+The main functions of interest are:
 
     disk_coords: Given geometrical properties of the disk and the emission
-        surface, will deproject the data into a face-on view in either polar or
-        cartesian coordaintes.
+        surface, will return the deprojected pixel coordinates in either polar
+        or cartesian coordaintes.
 
     keplerian: Builds a Keplerian rotation pattern with the provided
         geometrical properties and emission surface. Does not account for any
@@ -14,11 +16,10 @@ functions of interest are:
         various parameters constant or let them vary. Also allows for a flared
         emission surface which can be constrained with good quality data.
 
-TODO:
+Work in progress:
 
-    1) Include bounds for the initial optimization.
-    2) More robust plotting for the residual maps. A separate function maybe?
-    3) Can we do the deprojection analytically rather than iteratively?
+    > Include bounds for the initial optimization.
+    > Can we do the deprojection analytically rather than iteratively?
 """
 
 import numpy as np
@@ -35,7 +36,25 @@ class rotationmap:
     fwhm = 2. * np.sqrt(2 * np.log(2))
 
     def __init__(self, path, uncertainty=None, clip=None, downsample=None):
-        """Initialize the class."""
+        """
+        Read in the velocity maps and initialize the class. To make the fitting
+        quicker, we can clip the cube to a smaller region, or downsample the
+        image to get a quicker initial fit.
+
+        Args:
+            path (str): Relative path to the rotation map you want to fit.
+            uncertainty (Optional[srt]): Relative path to the map of v0
+                uncertainties. Must be a FITS file with the same shape as the
+                data. If nothing is specified, will assume a 10% on all pixels.
+            clip (Optional[float]): If specified, clip the data down to a
+                square with sides 2 x clip centered on the image center.
+            downsample (Optional[int]): Downsample the image by this factor for
+                quicker fitting. For example, using downsample=4 on an image
+                which is 1000 x 1000 pixels will reduce it to 250 x 250 pixels.
+
+        Returns:
+            None
+        """
 
         # Read in the data and position axes.
         self.data = np.squeeze(fits.getdata(path))
@@ -44,10 +63,11 @@ class rotationmap:
             self.error = np.squeeze(fits.getdata(uncertainty))
         else:
             print("No uncertainties found, assuming uncertainties of 10%.")
+            print("You can change this at any time with rotationmap.error.")
             self.error = 0.1 * self.data
         self.error = np.where(np.isnan(self.error), 0.0, self.error)
 
-        # Make sure this is in [km/s].
+        # Make sure the data is in [km/s].
         if np.nanmedian(self.data) > 10.0:
             self.data /= 1e3
             self.error /= 1e3
@@ -67,15 +87,8 @@ class rotationmap:
         # Estimate the systemic velocity.
         self.vlsr = np.nanmedian(self.data)
 
-        # Beam parameters. TODO: Make sure CASA beam tables work.
-        try:
-            self.bmaj = self.header['bmaj'] * 3600.
-            self.bmin = self.header['bmin'] * 3600.
-            self.bpa = self.header['bpa']
-        except KeyError:
-            self.bmaj = None
-            self.bmin = None
-            self.bpa = None
+        # Beam parameters.
+        self._readbeam()
 
     # -- Fitting functions. -- #
 
@@ -105,12 +118,13 @@ class rotationmap:
                 params['beam'] = True, where this must be a boolean, not an
                 integer.
             r_min (Optional[float]): Inner radius to fit in (arcsec).
-            r_max (Optional[float]): Outer radius to fit in (arcsec). Note that
-                for the masking the default p0 and params values are used for
-                the deprojection, or those found from the optimization.
+            r_max (Optional[float]): Outer radius to fit in (arcsec).
             optimize (Optional[bool]): Use scipy.optimize to find the p0 values
                 which maximize the likelihood. Better results will likely be
-                found.
+                found. Note that for the masking the default p0 and params
+                values are used for the deprojection, or those found from the
+                optimization. If this results in a poor initial mask, try with
+                optimise=False.
             nwalkers (Optional[int]): Number of walkers to use for the MCMC.
             scatter (Optional[float]): Scatter used in distributing walker
                 starting positions around the initial p0 values.
@@ -146,10 +160,12 @@ class rotationmap:
         r_min = r_min if r_min is not None else 0.0
         r_max = r_max if r_max is not None else 1e5
 
+        p0 = np.squeeze(p0).astype(float)
         temp = rotationmap._populate_dictionary(p0, params)
         self.ivar = self._calc_ivar(x0=temp['x0'], y0=temp['y0'],
                                     inc=temp['inc'], PA=temp['PA'],
                                     z0=temp['z0'], psi=temp['psi'],
+                                    z1=temp['z1'], phi=temp['phi'],
                                     tilt=temp['tilt'], r_min=r_min,
                                     r_max=r_max)
 
@@ -167,6 +183,7 @@ class rotationmap:
             self.ivar = self._calc_ivar(x0=temp['x0'], y0=temp['y0'],
                                         inc=temp['inc'], PA=temp['PA'],
                                         z0=temp['z0'], psi=temp['psi'],
+                                        z1=temp['z1'], phi=temp['phi'],
                                         tilt=temp['tilt'], r_min=r_min,
                                         r_max=r_max)
 
@@ -213,7 +230,7 @@ class rotationmap:
         def nlnL(theta):
             return -self._ln_probability(theta, params)
 
-        # TODO: think of a way to include bounds.
+        # TODO: implement bounds.
 
         res = minimize(nlnL, x0=theta, method='TNC',
                        options={'maxiter': 100000, 'ftol': 1e-3})
@@ -223,7 +240,7 @@ class rotationmap:
         else:
             print("WARNING: scipy.optimize did not converge.")
             print("Starting positions:")
-        print('\tp0 =', ['%.4e' % t for t in theta])
+        print('\tp0 =', ['%.2e' % t for t in theta])
         return theta
 
     @staticmethod
@@ -262,23 +279,27 @@ class rotationmap:
             return -np.inf
         if abs(self.vlsr - params['vlsr'] / 1e3) > 1.0:
             return -np.inf
-        if not 0.0 <= params['z0'] < 1.0:
+        if not 0. <= params['z0'] < 10.:
             return -np.inf
-        if not 0.0 < params['psi'] < 2.0:
+        if not 0. < params['psi'] < 5.:
             return -np.inf
-        if not -1.0 < params['tilt'] < 1.0:
+        if not -10. <= params['z1'] <= 10.:
+            return -np.inf
+        if not 0. < params['phi'] < 5.:
+            return -np.inf
+        if not -1. < params['tilt'] < 1.:
             return -np.inf
         return 0.0
 
     def _calc_ivar(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
-                   tilt=0.0, r_min=0.0, r_max=1e5):
+                   z1=0.0, phi=1.0, tilt=0.0, r_min=0.0, r_max=1e5):
         """Calculate the inverse variance including radius mask."""
         try:
             assert self.error.shape == self.data.shape
         except AttributeError:
             self.error = self.error * np.ones(self.data.shape)
-        rvals = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA,
-                                 z0=z0, psi=psi, tilt=tilt)[0]
+        rvals = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0,
+                                 psi=psi, z1=z1, phi=phi, tilt=tilt)[0]
         mask = np.logical_and(rvals >= r_min, rvals <= r_max)
         mask = np.logical_and(mask, self.error > 0.0)
         return np.where(mask, np.power(self.error, -2.0), 0.0)
@@ -314,6 +335,10 @@ class rotationmap:
             params['z0'] = 0.0
         if params.get('psi') is None:
             params['psi'] = 1.0
+        if params.get('z1') is None:
+            params['z1'] = 0.0
+        if params.get('phi') is None:
+            params['phi'] = 1.0
         if params.get('dist') is None:
             params['dist'] = 100.
         if params.get('tilt') is None:
@@ -330,7 +355,7 @@ class rotationmap:
     # -- Deprojection functions. -- #
 
     def disk_coords(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
-                    tilt=0.0, frame='polar'):
+                    z1=0.0, phi=0.0, tilt=0.0, frame='polar'):
         """
         Get the disk coordinates given certain geometrical parameters and an
         emission surface. The emission surface is parameterized as a powerlaw
@@ -348,6 +373,10 @@ class rotationmap:
             z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
                 To get the far side of the disk, make this number negative.
             psi (Optional[float]): Flaring angle for the emission surface.
+            z1 (Optional[float]): Aspect ratio correction term at 1" for the
+                emission surface. Should be opposite sign to z0.
+            phi (Optional[float]): Flaring angle correction term for the
+                emission surface.
             tilt (Optional[float]): Value between -1 and 1, positive values
                 result in the north side of the disk being closer to the
                 observer; negative values the south.
@@ -370,7 +399,8 @@ class rotationmap:
         # some flexibility for more complex emission surface parameterizations.
 
         def func(r):
-            return z0 * np.power(r, psi)
+            z = z0 * np.power(r, psi) + z1 * np.power(r, phi)
+            return np.where(z >= 0.0, z, 0.0)
 
         # Calculate the pixel values.
 
@@ -383,7 +413,7 @@ class rotationmap:
         return c1, c2, c3
 
     def deproject_image(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=1.0,
-                        tilt=0.0, image=None):
+                        z1=0.0, phi=0.0, tilt=0.0, image=None):
         """
         Deproject the image given the geometrical parameters. If no image is
         given, will used the attached rotation map.
@@ -398,6 +428,10 @@ class rotationmap:
             z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
                 To get the far side of the disk, make this number negative.
             psi (Optional[float]): Flaring angle for the emission surface.
+            z1 (Optional[float]): Aspect ratio correction term at 1" for the
+                emission surface. Should be opposite sign to z0.
+            phi (Optional[float]): Flaring angle correction term for the
+                emission surface.
             tilt (Optional[float]): Value between -1 and 1, positive values
                 result in the north side of the disk being closer to the
                 observer; negative values the south.
@@ -413,7 +447,8 @@ class rotationmap:
 
         # Deproject the pixels into cartesians coordinates.
         xpix, ypix, _ = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0,
-                                         psi=psi, tilt=tilt, frame='cartesian')
+                                         psi=psi, z1=z1, phi=phi, tilt=tilt,
+                                         frame='cartesian')
         xpix, ypix = xpix.flatten(), ypix.flatten()
         if image is not None:
             dpix = image.flatten()
@@ -487,7 +522,7 @@ class rotationmap:
     # -- Functions to build Keplerian rotation profiles. -- #
 
     def keplerian(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
-                  tilt=0.0, mstar=1.0, dist=100., vlsr=0.0):
+                  z1=0.0, phi=1.0, tilt=0.0, mstar=1.0, dist=100., vlsr=0.0):
         """
         Return a Keplerian rotation profile (not including pressure) in [m/s].
         This includes the deivation due to non-zero heights above the midplane,
@@ -503,6 +538,10 @@ class rotationmap:
             z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
                 To get the far side of the disk, make this number negative.
             psi (Optional[float]): Flaring angle for the emission surface.
+            z1 (Optional[float]): Aspect ratio correction term at 1" for the
+                emission surface. Should be opposite sign to z0.
+            phi (Optional[float]): Flaring angle correction term for the
+                emission surface.
             tilt (Optional[float]): Value between -1 and 1, positive values
                 result in the north side of the disk being closer to the
                 observer; negative values the south.
@@ -514,7 +553,7 @@ class rotationmap:
             vproj (ndarray): Projected Keplerian rotation at each pixel (m/s).
         """
         coords = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0, psi=psi,
-                                  tilt=tilt, frame='polar')
+                                  z1=z1, phi=phi, tilt=tilt, frame='polar')
         rvals = coords[0] * sc.au * dist
         zvals = coords[2] * sc.au * dist
         vkep = sc.G * mstar * self.msun * np.power(rvals, 2.0)
@@ -526,7 +565,8 @@ class rotationmap:
         vkep = self.keplerian(x0=params['x0'], y0=params['y0'],
                               inc=params['inc'], PA=params['PA'],
                               vlsr=params['vlsr'], z0=params['z0'],
-                              psi=params['psi'], mstar=params['mstar'],
+                              psi=params['psi'], z1=params['z1'],
+                              phi=params['phi'], mstar=params['mstar'],
                               dist=params['dist'], tilt=params['tilt'])
         if params['beam']:
             vkep = rotationmap._convolve_image(vkep, self._beamkernel())
@@ -563,6 +603,23 @@ class rotationmap:
         return 3600 * ((np.arange(a_len) - a_pix + 1.5) * a_del)
 
     # -- Convolution functions. -- #
+
+    def _readbeam(self):
+        """Reads the beam properties from the header."""
+        try:
+            if self.header.get('CASAMBM', False):
+                beam = fits.open(self.path)[1].data
+                beam = np.median([b[:3] for b in beam.view()], axis=0)
+                self.bmaj, self.bmin, self.bpa = beam
+            else:
+                self.bmaj = self.header['bmaj'] * 3600.
+                self.bmin = self.header['bmin'] * 3600.
+                self.bpa = self.header['bpa']
+        except:
+            self.bmaj = self.dpix
+            self.bmin = self.dpix
+            self.bpa = 0.0
+            self.beamarea = self.dpix**2.0
 
     def _beamkernel(self):
         """Returns the 2D Gaussian kernel for convolution."""
@@ -681,7 +738,8 @@ class rotationmap:
         from matplotlib.patches import Ellipse
         beam = Ellipse(ax.transLimits.inverted().transform((dx, dy)),
                        width=self.bmin, height=self.bmaj, angle=-self.bpa,
-                       fill=False, hatch=kwargs.get('hatch', '////////'),
+                       fill=kwargs.get('fill', False),
+                       hatch=kwargs.get('hatch', '//////////'),
                        lw=kwargs.get('linewidth', kwargs.get('lw', 1)),
                        color=kwargs.get('color', kwargs.get('c', 'k')),
                        zorder=kwargs.get('zorder', 1000))

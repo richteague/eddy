@@ -66,10 +66,13 @@ class ensemble(object):
                 searching for the true velocity, set as +\- 30%.
             p0 (Optional[list]): Initial parameters for the minimization. Will
                 override any guess for vref.
-            resample (Optional[bool]): Resample the shifted spectra down to the
-                original velocity resolution. Not recommended.
+            resample (Optional[bool]): Resample the shifted spectra by this
+                factor. For example, resample = 2 will shift and bin the
+                spectrum down to sampling rate twice that of the original data.
+                Not recommended for the GP approach.
             optimize (Optional[bool]): Optimize the starting positions before
-                the MCMC runs.
+                the MCMC runs. If an integer, the number of iterations to use
+                of optimization.
             nwalkers (Optional[int]): Number of walkers used for the MCMC runs.
             nburnin (Optional[int]): Number of steps used to burn in walkers.
             nsteps (Optional[int]): Number of steps taken to sample posteriors.
@@ -99,8 +102,11 @@ class ensemble(object):
         if vref is not None and p0 is not None:
             print("WARNING: Initial value of p0 (%.2f) " % (p0[0]) +
                   "used in place of vref (%.2f)." % (vref))
-        if not isinstance(vref, (int, float)):
-            vref = vref[0]
+        if vref is not None:
+            if not isinstance(vref, (int, float)):
+                vref = vref[0]
+        else:
+            vref = self.guess_parameters(fit=True)[0]
         p0 = self._guess_parameters_GP(vref) if p0 is None else p0
         if len(p0) != 4:
             raise ValueError('Incorrect length of p0.')
@@ -108,7 +114,8 @@ class ensemble(object):
 
         # Optimize if necessary.
         if optimize:
-            p0 = self._optimize_p0(p0, resample=resample, **kwargs)
+            p0 = self._optimize_p0(p0, N=optimize, resample=resample, **kwargs)
+            vref = p0[0]
         p0 = ensemble._randomize_p0(p0, nwalkers, scatter)
         if np.any(np.isnan(p0)):
             raise ValueError("WARNING: NaNs in the p0 array.")
@@ -134,27 +141,78 @@ class ensemble(object):
             return percentiles
         return percentiles[:, 0]
 
-    def _optimize_p0(self, p0, resample=True, **kwargs):
-        """Optimize the starting positions."""
+    def _optimize_p0(self, p0, N=1, resample=True, **kwargs):
+        """
+        Optimize the starting positions, p0. We do this in a slightly hacky way
+        because the minimum is not easily found. We first optimize the hyper
+        parameters of the GP model, holding the rotation velocity constant,
+        then, holding the GP hyperparameters constant, optimizing the rotation
+        velocity, before optimizing everything together. This can be run
+        multiple times to iteratie to a global optimum.
+
+        Args:
+            p0 (ndarray): Initial guess of the starting positions.
+            N (Optional[int]): Interations of the optimization to run.
+            resample (Optional[bool/int]): If true, resample the deprojected
+                spectra donw to the original velocity resolution. If an integer
+                is given, use this as the bew sampling rate relative to the
+                original data.
+
+        Returns:
+            p0 (ndarray): Optimized array. If scipy.minimize does not converge
+                then p0 will not be updated. No warnings are given, however.
+        """
         from scipy.optimize import minimize
         kwargs['method'] = kwargs.get('method', 'L-BFGS-B')
-        res = minimize(self._negative_lnlikelihood, x0=p0,
-                       args=(resample), **kwargs)
-        if not res.success:
-            kwargs['method'] = kwargs.get('method', 'Nelder-Mead')
-            kwargs['options'] = {'maxiter': 100000}
+        kwargs['options'] = {'maxiter': 100000, 'maxfun': 100000, 'ftol': 1e-4}
+
+        # Cycle through the required number of iterations. Only update p0 if
+        # both the minimization converged (res.success == True) and there is an
+        # improvement in the likelihood.
+
+        nlnL = self._negative_lnlikelihood(p0, resample=resample)
+
+        for i in range(int(N)):
+
+            # Define the bounds.
+            bounds = (0.8 * p0[0], 1.2 * p0[0])
+            bounds = [bounds, (0.0, None), (-15.0, 10.0), (0.0, 10.0)]
+
+            # First minimize hyper parameters, holding vrot constant.
+            res = minimize(self._negative_lnlikelihood_hyper, x0=p0[1:],
+                           args=(p0[0], resample), bounds=bounds[1:],
+                           **kwargs)
+            if res.success:
+                p0_temp = p0
+                p0_temp[1:] = res.x
+                nlnL_temp = self._negative_lnlikelihood(p0_temp, resample)
+                if nlnL_temp < nlnL:
+                    p0 = p0_temp
+                    nlnL = nlnL_temp
+
+            # Second, minimize vrot holding the hyper parameters constant.
+            res = minimize(self._negative_lnlikelihood_vrot, x0=p0[0],
+                           args=(p0[1:], resample), bounds=[bounds[0]],
+                           **kwargs)
+            if res.success:
+                p0_temp = p0
+                p0_temp[0] = res.x
+                nlnL_temp = self._negative_lnlikelihood(p0_temp, resample)
+                if nlnL_temp < nlnL:
+                    p0 = p0_temp
+                    nlnL = nlnL_temp
+
+            # Final minimization with everything.
             res = minimize(self._negative_lnlikelihood, x0=p0,
-                           args=(resample), **kwargs)
-            if not res.success:
-                print("WARNING: scipy.optimize.minimze did not converge.")
-            elif np.isfinite(ensemble._lnprior(res.x, p0[0])):
-                p0 = res.x
-            else:
-                print("WARNING: optimized parameters inconsistent with prior.")
-        elif np.isfinite(ensemble._lnprior(res.x, p0[0])):
-            p0 = res.x
-        else:
-            print("WARNING: optimized parameters inconsistent with prior.")
+                           args=(resample), bounds=bounds,
+                           **kwargs)
+            if res.success:
+                p0_temp = res.x
+                nlnL_temp = self._negative_lnlikelihood(p0_temp, resample)
+                if nlnL_temp < nlnL:
+                    p0 = p0_temp
+                    nlnL = nlnL_temp
+
         return p0
 
     def _guess_parameters_GP(self, vref, fit=True):
@@ -172,6 +230,18 @@ class ensemble(object):
         dp0 = np.random.randn(nwalkers * len(p0)).reshape(nwalkers, len(p0))
         dp0 = np.where(p0 == 0.0, 1.0, p0)[None, :] * (1.0 + scatter * dp0)
         return np.where(p0[None, :] == 0.0, dp0 - 1.0, dp0)
+
+    def _negative_lnlikelihood_vrot(self, vrot, hyperparams, resample=False):
+        """Negative log-likelihood function with vrot as only variable."""
+        theta = np.insert(hyperparams, 0, vrot)
+        nll = -self._lnlikelihood(theta, resample)
+        return nll if np.isfinite(nll) else 1e15
+
+    def _negative_lnlikelihood_hyper(self, hyperparams, vrot, resample=False):
+        """Negative log-likelihood function with hyperparams as variables."""
+        theta = np.insert(hyperparams, 0, vrot)
+        nll = -self._lnlikelihood(theta, resample)
+        return nll if np.isfinite(nll) else 1e15
 
     def _negative_lnlikelihood(self, theta, resample=False):
         """Negative log-likelihood function for optimization."""
@@ -202,7 +272,9 @@ class ensemble(object):
     def _lnprior(theta, vref):
         """Uninformative log-prior function for MCMC."""
         vrot, noise, lnsigma, lnrho = theta
-        if abs(vrot - vref) / vref > 0.3:
+        if abs(vrot - vref) / vref > 0.2:
+            return -np.inf
+        if vrot <= 0.0:
             return -np.inf
         if noise <= 0.0:
             return -np.inf
@@ -242,8 +314,9 @@ class ensemble(object):
             vref (Optional[float]): Predicted rotation velocity, typically the
                 Keplerian velocity at that radius. Will be used as the starting
                 position for the minimization.
-            resample (Optional[bool]): Resample the shifted spectra down to the
-                original velocity resolution. Not recommended.
+            resample (Optional[bool]): Resample the shifted spectra by this
+                factor. For example, resample = 2 will shift and bin the
+                spectrum down to sampling rate twice that of the original data.
 
         Returns:
             vrot (float): Rotation velocity which minimizes the width.
@@ -256,7 +329,7 @@ class ensemble(object):
         return res.x if res.success else np.nan
 
     @staticmethod
-    def _get_p0_dV(x, y):
+    def _get_p0_gaussian(x, y):
         """Estimate (x0, dV, Tb) for the spectrum."""
         if x.size != y.size:
             raise ValueError("Mismatch in array shapes.")
@@ -266,23 +339,41 @@ class ensemble(object):
         return x0, dV, Tb
 
     @staticmethod
-    def _get_gaussian_width(spectrum, velax, fill_value=1e50):
-        """Return the absolute width of a Gaussian fit to the spectrum."""
+    def _fit_gaussian(x, y, dy=None, return_uncertainty=False):
+        """Fit a gaussian to (x, y, [dy])."""
         try:
-            dV = curve_fit(ensemble._gaussian, velax, spectrum,
-                           p0=ensemble._get_p0_dV(velax, spectrum),
-                           maxfev=100000)[0][1]
-            return abs(dV)
+            popt, cvar = curve_fit(ensemble._gaussian, x, y, sigma=dy,
+                                   p0=ensemble._get_p0_gaussian(x, y),
+                                   absolute_sigma=True, maxfev=100000)
+            cvar = np.diag(cvar)
         except Exception:
-            return fill_value
+            popt = [np.nan, np.nan, np.nan]
+            cvar = popt.copy()
+        if return_uncertainty:
+            return popt, cvar
+        return popt
+
+    @staticmethod
+    def _get_gaussian_width(x, y, fill_value=1e50):
+        """Return the absolute width of a Gaussian fit to the spectrum."""
+        dV = ensemble._fit_gaussian(x, y)[1]
+        if np.isfinite(dV):
+            return abs(dV)
+        return fill_value
+
+    @staticmethod
+    def _get_gaussian_center(x, y):
+        """Return the line center from a Gaussian fit to the spectrum."""
+        x0 = ensemble._fit_gaussian(x, y)[0]
+        if np.isfinite(x0):
+            return abs(x0)
+        return x[np.argmax(y)]
 
     def get_deprojected_width(self, vrot, resample=True):
         """Return the spectrum from a Gaussian fit."""
         x, y = self.deprojected_spectrum(vrot, resample=resample)
-        if resample:
-            mask = np.logical_and(x >= self.velax[0], x <= self.velax[-1])
-            x, y = x[mask], y[mask]
-        return ensemble._get_gaussian_width(y, x)
+        mask = np.logical_and(x >= self.velax[0], x <= self.velax[-1])
+        return ensemble._get_gaussian_width(x[mask], y[mask])
 
     # -- Line Profile Functions -- #
 
@@ -319,23 +410,70 @@ class ensemble(object):
             spectra += [shifted(self.velax)]
         return np.squeeze(spectra)
 
-    def deprojected_spectrum(self, vrot, resample=True):
+    def deprojected_spectrum(self, vrot, resample=False):
         """Returns (x, y) of collapsed deprojected spectrum."""
         vpnts = self.velax[None, :] - vrot * np.cos(self.theta)[:, None]
-        vpnts = vpnts.flatten()
+        vpnts, spnts = self._order_spectra(vpnts=vpnts.flatten())
+        return self._resample_spectra(vpnts, spnts, resample=resample)
+
+    def deprojected_spectrum_maximum(self, resample=False, method='quadratic'):
+        """Deprojects data such that their max values are aligned."""
+        vmax = self.peak_velocities(method=method)
+        vpnts = np.array([self.velax - dv for dv in vmax - np.median(vmax)])
+        vpnts, spnts = self._order_spectra(vpnts=vpnts.flatten())
+        return self._resample_spectra(vpnts, spnts, resample=resample)
+
+    def peak_velocities(self, method='quadratic'):
+        """
+        Return the velocities of the peak pixels.
+
+        Args:
+            method (str): Method used to determine the line centroid. Must be
+                in ['max', 'quadratic', 'gaussian']. The former returns the
+                pixel of maximum value, 'quadratic' fits a quadratic to the
+                pixel of maximum value and its two neighbouring pixels (see
+                Teague & Foreman-Mackey 2018 for details) and 'gaussian' fits a
+                Gaussian profile to the line.
+
+        Returns:
+            vmax (ndarray): Line centroids.
+        """
+        method = method.lower()
+        if method == 'max':
+            vmax = np.take(self.velax, np.argmax(self.spectra, axis=1))
+        elif method == 'quadratic':
+            from bettermoments.methods import quadratic
+            vmax = [quadratic(spectrum, x0=self.velax[0], dx=self.channel)[0]
+                    for spectrum in self.spectra]
+            vmax = np.array(vmax)
+        elif method == 'gaussian':
+            vmax = [ensemble._get_gaussian_center(self.velax, spectrum)
+                    for spectrum in self.spectra]
+            vmax = np.array(vmax)
+        else:
+            raise ValueError("method is not 'max', 'gaussian' or 'quadratic'.")
+        return vmax
+
+    def _order_spectra(self, vpnts, spnts=None):
+        """Return velocity order spectra."""
+        spnts = self.spectra_flat if spnts is None else spnts
+        if len(spnts) != len(vpnts):
+            raise ValueError("Wrong size in 'vpnts' and 'spnts'.")
         idxs = np.argsort(vpnts)
-        vpnts, spnts = vpnts[idxs], self.spectra_flat[idxs]
+        return vpnts[idxs], spnts[idxs]
+
+    def _resample_spectra(self, vpnts, spnts, resample=False):
+        """Resample the spectra."""
         if not resample:
             return vpnts, spnts
-        spectrum = binned_statistic(vpnts, spnts,
-                                    statistic='mean',
-                                    bins=self.velax.size,
-                                    range=self.velax_range)[0]
-        return self.velax, spectrum
+        bins = int((self.velax.size - 1) * resample)
+        y, x_edges = binned_statistic(vpnts, spnts, statistic='mean',
+                                      bins=bins, range=self.velax_range)[:2]
+        return np.average([x_edges[1:], x_edges[:-1]], axis=0), y
 
-    def guess_parameters(self, fit=True, fix_theta=True):
+    def guess_parameters(self, fit=True, fix_theta=True, method='quadratic'):
         """Guess vrot and vlsr from the spectra.."""
-        vpeaks = np.take(self.velax, np.argmax(self.spectra, axis=1))
+        vpeaks = self.peak_velocities(method=method)
         vrot = 0.5 * (np.max(vpeaks) - np.min(vpeaks))
         vlsr = np.mean(vpeaks)
         if not fit:
@@ -365,6 +503,7 @@ class ensemble(object):
     def plot_river(self, vrot=None, ax=None, xlims=None, ylims=None,
                    plot_max=True):
         """Plot a river plot."""
+        raise NotImplementedError("No. Not now.")
         if vrot is None:
             toplot = self.spectra
         else:
