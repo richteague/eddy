@@ -31,12 +31,12 @@ class ensemble(object):
 
         # Remove empty pixels.
         if remove_empty:
-            idxs = np.sum(spectra, axis=-1) > 0.0
+            idxs = np.sum(self.spectra, axis=-1) > 0.0
             self.theta = self.theta[idxs]
             self.spectra = self.spectra[idxs]
 
         # Easier to use variables.
-        self.theta_deg = np.degrees(theta) % 360.
+        self.theta_deg = np.degrees(self.theta) % 360.
         self.spectra_flat = self.spectra.flatten()
 
         # Check there's actually spectra.
@@ -53,9 +53,9 @@ class ensemble(object):
     # -- Rotation Velocity by Gaussian Process Modelling -- #
 
     def get_vrot_GP(self, vref=None, p0=None, resample=False, optimize=True,
-                    nwalkers=64, nburnin=300, nsteps=300, nburns=1,
-                    scatter=1e-3, plot_walkers=True, plot_corner=True,
-                    return_all=False, **kwargs):
+                    nwalkers=64, nburnin=300, nsteps=300, scatter=1e-3,
+                    plot_walkers=True, plot_corner=True, return_all=False,
+                    **kwargs):
         """Infer the rotation velocity of the annulus by finding the velocity
         which after deprojecting the spectra to a common velocity produces the
         smoothest spectrum.
@@ -76,9 +76,6 @@ class ensemble(object):
             nwalkers (Optional[int]): Number of walkers used for the MCMC runs.
             nburnin (Optional[int]): Number of steps used to burn in walkers.
             nsteps (Optional[int]): Number of steps taken to sample posteriors.
-            nburns (Optional[int]): Number of burn in periods to run,
-                recentering the walkers around the median value each time. This
-                isn't strictly kosher, so beware!
             scatter (Optional[float]): Scatter applied to the starting
                 positions before running the MCMC.
             plot_walkers (Optional[bool]): Plot the trace of the walkers.
@@ -509,8 +506,8 @@ class ensemble(object):
             spectra (Optional[ndarray]): The array of spectra to calculate the
                 line centroids on. If nothing is given, use self.spectra. Must
                 be on the same velocity axis.
-            velax (Optional[ndarray]): If method == 'quadratic', must provide
-                the velocity axis if different from the attached array/
+            velax (Optional[ndarray]): Must provide the velocity axis if
+                different from the attached array.
 
         Returns:
             vmax (ndarray): Line centroids.
@@ -519,14 +516,14 @@ class ensemble(object):
         spectra = self.spectra if spectra is None else spectra
         velax = self.velax if velax is None else velax
         if method == 'max':
-            vmax = np.take(self.velax, np.argmax(spectra, axis=1))
+            vmax = np.take(velax, np.argmax(spectra, axis=1))
         elif method == 'quadratic':
             from bettermoments.methods import quadratic
             vmax = [quadratic(spectrum, x0=velax[0], dx=np.diff(velax)[0])[0]
                     for spectrum in spectra]
             vmax = np.array(vmax)
         elif method == 'gaussian':
-            vmax = [ensemble._get_gaussian_center(self.velax, spectrum)
+            vmax = [ensemble._get_gaussian_center(velax, spectrum)
                     for spectrum in spectra]
             vmax = np.array(vmax)
         else:
@@ -588,7 +585,11 @@ class ensemble(object):
     def plot_river(self, vrot=None, ax=None, tgrid=None, vgrid=None,
                    xlims=None, ylims=None, normalize=True, plot_max=True,
                    method='quadratic', imshow=True, **kwargs):
-        """Make a river plot."""
+        """
+        Make a river plot.
+
+        Details coming soon.
+        """
         if vrot is None:
             toplot = self.spectra
         else:
