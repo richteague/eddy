@@ -31,7 +31,7 @@ class ensemble(object):
 
         # Remove empty pixels.
         if remove_empty:
-            idxs = np.sum(spectra, axis=-1) > 0.0
+            idxs = np.sum(self.spectra, axis=-1) > 0.0
             self.theta = self.theta[idxs]
             self.spectra = self.spectra[idxs]
 
