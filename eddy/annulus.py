@@ -37,7 +37,7 @@ class ensemble(object):
 
         # Easier to use variables.
         self.theta_deg = np.degrees(theta) % 360.
-        self.spectra_flat = spectra.flatten()
+        self.spectra_flat = self.spectra.flatten()
 
         # Check there's actually spectra.
         if self.theta.size < 1:
@@ -53,9 +53,9 @@ class ensemble(object):
     # -- Rotation Velocity by Gaussian Process Modelling -- #
 
     def get_vrot_GP(self, vref=None, p0=None, resample=False, optimize=True,
-                    nwalkers=64, nburnin=300, nsteps=300, scatter=1e-3,
-                    plot_walkers=True, plot_corner=True, return_all=False,
-                    **kwargs):
+                    nwalkers=64, nburnin=300, nsteps=300, nburns=1,
+                    scatter=1e-3, plot_walkers=True, plot_corner=True,
+                    return_all=False, **kwargs):
         """Infer the rotation velocity of the annulus by finding the velocity
         which after deprojecting the spectra to a common velocity produces the
         smoothest spectrum.
@@ -76,6 +76,9 @@ class ensemble(object):
             nwalkers (Optional[int]): Number of walkers used for the MCMC runs.
             nburnin (Optional[int]): Number of steps used to burn in walkers.
             nsteps (Optional[int]): Number of steps taken to sample posteriors.
+            nburns (Optional[int]): Number of burn in periods to run,
+                recentering the walkers around the median value each time. This
+                isn't strictly kosher, so beware!
             scatter (Optional[float]): Scatter applied to the starting
                 positions before running the MCMC.
             plot_walkers (Optional[bool]): Plot the trace of the walkers.
@@ -166,9 +169,18 @@ class ensemble(object):
         """
         from scipy.optimize import minimize
         verbose = kwargs.pop('verbose', False)
-        kwargs['method'] = kwargs.get('method', 'L-BFGS-B')
-        kwargs['options'] = {'maxiter': 100000, 'maxfun': 100000, 'ftol': 1e-4}
 
+        # Default parameters for the minimization.
+        # Bit messy to preserve user chosen values.
+        kwargs['method'] = kwargs.get('method', 'L-BFGS-B')
+        options = kwargs.pop('options', {})
+        kwargs['options'] = {'maxiter': options.pop('maxiter', 100000),
+                             'maxfun': options.pop('maxfun', 100000),
+                             'ftol': options.pop('ftol', 1e-4)}
+        for key in options.keys():
+            kwargs['options'][key] = options[key]
+
+        # Starting negative log likelihood to test against.
         nlnL = self._negative_lnlikelihood(p0, resample=resample)
 
         # Cycle through the required number of iterations.
@@ -281,7 +293,7 @@ class ensemble(object):
     def _lnprior(theta, vref):
         """Uninformative log-prior function for MCMC."""
         vrot, noise, lnsigma, lnrho = theta
-        if abs(vrot - vref) / vref > 0.2:
+        if abs(vrot - vref) / vref > 0.4:
             return -np.inf
         if vrot <= 0.0:
             return -np.inf
@@ -483,7 +495,7 @@ class ensemble(object):
         vpnts, spnts = self._order_spectra(vpnts=vpnts.flatten())
         return self._resample_spectra(vpnts, spnts, resample=resample)
 
-    def line_centroids(self, method='quadratic'):
+    def line_centroids(self, method='quadratic', spectra=None, velax=None):
         """
         Return the velocities of the peak pixels.
 
@@ -494,21 +506,28 @@ class ensemble(object):
                 pixel of maximum value and its two neighbouring pixels (see
                 Teague & Foreman-Mackey 2018 for details) and 'gaussian' fits a
                 Gaussian profile to the line.
+            spectra (Optional[ndarray]): The array of spectra to calculate the
+                line centroids on. If nothing is given, use self.spectra. Must
+                be on the same velocity axis.
+            velax (Optional[ndarray]): If method == 'quadratic', must provide
+                the velocity axis if different from the attached array/
 
         Returns:
             vmax (ndarray): Line centroids.
         """
         method = method.lower()
+        spectra = self.spectra if spectra is None else spectra
+        velax = self.velax if velax is None else velax
         if method == 'max':
-            vmax = np.take(self.velax, np.argmax(self.spectra, axis=1))
+            vmax = np.take(self.velax, np.argmax(spectra, axis=1))
         elif method == 'quadratic':
             from bettermoments.methods import quadratic
-            vmax = [quadratic(spectrum, x0=self.velax[0], dx=self.channel)[0]
-                    for spectrum in self.spectra]
+            vmax = [quadratic(spectrum, x0=velax[0], dx=np.diff(velax)[0])[0]
+                    for spectrum in spectra]
             vmax = np.array(vmax)
         elif method == 'gaussian':
             vmax = [ensemble._get_gaussian_center(self.velax, spectrum)
-                    for spectrum in self.spectra]
+                    for spectrum in spectra]
             vmax = np.array(vmax)
         else:
             raise ValueError("method is not 'max', 'gaussian' or 'quadratic'.")
@@ -526,10 +545,10 @@ class ensemble(object):
         """Resample the spectra."""
         if not resample:
             return vpnts, spnts
-        bins = int((self.velax.size - 1) * resample)
-        y, x_edges = binned_statistic(vpnts, spnts, statistic='mean',
-                                      bins=bins, range=self.velax_range)[:2]
-        return np.average([x_edges[1:], x_edges[:-1]], axis=0), y
+        bins = self.velax.size * resample + 1
+        bins = np.linspace(self.velax[0], self.velax[-1], int(bins))
+        y, x, _ = binned_statistic(vpnts, spnts, statistic='mean', bins=bins)
+        return np.average([x[1:], x[:-1]], axis=0), y
 
     def guess_parameters(self, fit=True, fix_theta=True, method='quadratic'):
         """Guess vrot and vlsr from the spectra.."""
@@ -554,7 +573,7 @@ class ensemble(object):
         """Grid the data to plot as a river."""
         from scipy.interpolate import griddata
         if tgrid is None:
-            tgrid = np.linspace(-np.pi, np.pi, self.theta.size)
+            tgrid = np.linspace(self.theta[0], self.theta[-1], self.theta.size)
         if vgrid is None:
             vgrid = self.velax
         if spnts is None:
@@ -562,32 +581,49 @@ class ensemble(object):
         vpnts = (self.velax[None, :] * np.ones(self.spectra.shape)).flatten()
         tpnts = (self.theta[:, None] * np.ones(self.spectra.shape)).flatten()
         sgrid = griddata((vpnts, tpnts), spnts.flatten(),
-                         (vgrid[None, :], tgrid[:, None]), **kwargs)
-        return vgrid, tgrid, sgrid
+                         (vgrid[None, :], tgrid[:, None]),
+                         **kwargs)
+        return vgrid, tgrid, np.where(np.isfinite(sgrid), sgrid, 0.0)
 
     def plot_river(self, vrot=None, ax=None, tgrid=None, vgrid=None,
-                   xlims=None, ylims=None, normalize=True, plot_max=True):
+                   xlims=None, ylims=None, normalize=True, plot_max=True,
+                   method='quadratic', imshow=True, **kwargs):
         """Make a river plot."""
         if vrot is None:
             toplot = self.spectra
         else:
             toplot = self.deprojected_spectra(vrot)
+        vgrid, tgrid, sgrid = self._grid_river(spnts=toplot, tgrid=tgrid,
+                                               vgrid=vgrid)
         if normalize:
-            toplot /= np.nanmax(toplot, axis=1)[:, None]
-        toplot = np.where(np.isnan(toplot), 0.0, toplot)
-        grids = self._grid_river(spnts=toplot, tgrid=tgrid, vgrid=vgrid)
-        vgrid, tgrid, sgrid = grids
+            sgrid /= np.nanmax(sgrid, axis=1)[:, None]
+
         ax = ensemble._make_axes(ax)
-        ax.imshow(toplot, origin='lower', interpolation='nearest',
-                  aspect='auto', vmin=0.0, vmax=1.0,
-                  extent=[vgrid[0], vgrid[-1], tgrid[0], tgrid[-1]])
+
+        if imshow:
+            ax.imshow(sgrid, origin='lower', interpolation='nearest',
+                      extent=[vgrid[0], vgrid[-1], tgrid[0], tgrid[-1]],
+                      aspect='auto', vmin=0.0 if normalize else None,
+                      vmax=1.0 if normalize else None, **kwargs)
+        else:
+            ax.contourf(vgrid, tgrid, sgrid, 50,
+                        vmin=0.0 if normalize else None,
+                        vmax=1.0 if normalize else None, **kwargs)
+
         if plot_max:
-            ax.errorbar(np.take(vgrid, np.argmax(toplot, axis=1)),
-                        self.theta, color='k', fmt='o', mew=0.0, ms=2)
+            vmax = self.line_centroids(method=method,
+                                       spectra=sgrid, velax=vgrid)
+            ax.errorbar(vmax, self.theta, color='k', fmt='o', mew=0.0, ms=2)
+
         if xlims is not None:
             ax.set_xlim(xlims[0], xlims[1])
+        else:
+            ax.set_xlim(vgrid[0], vgrid[-1])
         if ylims is not None:
             ax.set_ylim(ylims[0], ylims[1])
+        else:
+            ax.set_ylim(tgrid[0], tgrid[-1])
+
         ax.set_xlabel(r'${\rm Velocity \quad (m\,s^{-1})}$')
         ax.set_ylabel(r'${\rm Polar \,\, Angle \quad (rad)}$')
         return ax
@@ -605,7 +641,7 @@ class ensemble(object):
         return ax
 
     @staticmethod
-    def _make_axes(ax):
+    def _make_axes(ax=None):
         """Make an axis to plot on."""
         import matplotlib.pyplot as plt
         if ax is None:
