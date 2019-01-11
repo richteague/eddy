@@ -1,7 +1,32 @@
-"""Simple class to deproject spectra and measure the rotation velocity."""
+"""
+A class to load an annulus of spectra and ther associated polar angles. By
+shifting and stacking the spectra, one can measure extremely precise rotational
+velocities, as described in Teague et al. (2018a, 2018c).
+
+The main functions of interest are:
+
+    get_vrot_dV: Find the rotation velocity which minimized the width of the
+        stacked spectrum, as used in Teague et al. (2018a).
+
+    get_vrot_SNR: Find the rotation velocity which maximises the
+        signal-to-noise ratio of the stacked line profile, as used in Yen et
+        al. (2016, 2018) or Matra et al. (2016).
+
+    get_vrot_GP: Find the rotation velocity which returns the smoothest line
+        profile when stacked as modelled by a Gaussian Process, as used in
+        Teague et al. (2018c). This function works without having to assume a
+        line profile and thus works additionally for absorption lines and
+        (hyper-)fine structure.
+
+Work in progress:
+
+    > Better river plot analyses.
+
+"""
 
 import celerite
 import numpy as np
+import matplotlib.pyplot as plt
 from scipy.stats import binned_statistic
 from scipy.optimize import curve_fit
 from scipy.optimize import minimize_scalar
@@ -582,13 +607,40 @@ class ensemble(object):
                          **kwargs)
         return vgrid, tgrid, np.where(np.isfinite(sgrid), sgrid, 0.0)
 
-    def plot_river(self, vrot=None, ax=None, tgrid=None, vgrid=None,
+    def plot_river(self, ax=None, vrot=None, tgrid=None, vgrid=None,
                    xlims=None, ylims=None, normalize=True, plot_max=True,
-                   method='quadratic', imshow=True, **kwargs):
+                   method='quadratic', imshow=True, residual=False,
+                   significance=True, **kwargs):
         """
-        Make a river plot.
+        Make a river plot, showing how the spectra change around the azimuth.
+        This is a nice way to search for structure within the data.
 
-        Details coming soon.
+        Args:
+            ax (Optional[axes]): Axis to plot onto.
+            vrot (Optional[float]): Rotational velocity used to deprojected the
+                spectra. If none is provided, no deprojection is used.
+            tgrid (Optional[ndarray]): Theta grid in [rad] used for gridding
+                the data.
+            vgrid (Optional[ndarray]): Velocity grid in [m/s] used for gridding
+                the data.
+            xlims (Optional[list]): Minimum and maximum x range for the figure.
+            ylims (Optional[list]): Minimum and maximum y range for the figure.
+            normalize (Optional[bool]): Normalize each row such that the peak
+                of the line is 1.
+            plot_max (Optional[bool]): Plot the line centroid for each
+                spectrum.
+            method (Optional[str]): The method used to calculate the line
+                centroid if plot_max == True. Must be 'max', 'gaussian' or
+                'quadratic'.
+            imshow (Optional[bool]): Plot using imshow rather than contourf.
+            residual (Optional[bool]): If true, subtract the azimuthally
+                averaged line profile.
+            significance (Optional[bool]): Plot the (n * 3) sigma contours for
+                the residuals.
+
+        Returns:
+            ax: The fugure axes instance.
+            cb: The colorbar instance
         """
         if vrot is None:
             toplot = self.spectra
@@ -599,17 +651,23 @@ class ensemble(object):
         if normalize:
             sgrid /= np.nanmax(sgrid, axis=1)[:, None]
 
+        if residual:
+            scatter = np.nanstd(sgrid, axis=0)
+            sgrid -= np.nanmean(sgrid, axis=0)[None, :]
+
         ax = ensemble._make_axes(ax)
 
         if imshow:
-            ax.imshow(sgrid, origin='lower', interpolation='nearest',
-                      extent=[vgrid[0], vgrid[-1], tgrid[0], tgrid[-1]],
-                      aspect='auto', vmin=0.0 if normalize else None,
-                      vmax=1.0 if normalize else None, **kwargs)
+            im = ax.imshow(sgrid, origin='lower', interpolation='nearest',
+                           extent=[vgrid[0], vgrid[-1], tgrid[0], tgrid[-1]],
+                           aspect='auto', **kwargs)
         else:
-            ax.contourf(vgrid, tgrid, sgrid, 50,
-                        vmin=0.0 if normalize else None,
-                        vmax=1.0 if normalize else None, **kwargs)
+            im = ax.contourf(vgrid, tgrid, sgrid, 50, **kwargs)
+        cb = plt.colorbar(im, pad=0.02)
+
+        if residual and significance:
+            ax.contour(vgrid, tgrid, abs(sgrid) / scatter[None, :],
+                       np.arange(3, 300, 3), colors='k', linewidths=1.0)
 
         if plot_max:
             vmax = self.line_centroids(method=method,
@@ -627,7 +685,7 @@ class ensemble(object):
 
         ax.set_xlabel(r'${\rm Velocity \quad (m\,s^{-1})}$')
         ax.set_ylabel(r'${\rm Polar \,\, Angle \quad (rad)}$')
-        return ax
+        return ax, cb
 
     # -- Plotting Functions -- #
 
@@ -644,7 +702,6 @@ class ensemble(object):
     @staticmethod
     def _make_axes(ax=None):
         """Make an axis to plot on."""
-        import matplotlib.pyplot as plt
         if ax is None:
             _, ax = plt.subplots()
         return ax
@@ -661,7 +718,6 @@ class ensemble(object):
     @staticmethod
     def _plot_walkers(sampler, nburnin):
         """Plot the walkers from the MCMC."""
-        import matplotlib.pyplot as plt
         labels = [r'${\rm v_{rot}}$', r'${\rm \sigma_{rms}}$',
                   r'${\rm ln(\sigma)}$', r'${\rm ln(\rho)}$']
         for s, sample in enumerate(sampler.chain.T):
