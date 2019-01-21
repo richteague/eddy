@@ -16,6 +16,9 @@ The main functions of interest are:
         various parameters constant or let them vary. Also allows for a flared
         emission surface which can be constrained with good quality data.
 
+    deproject_image: A conveniance function to deproject a provided image using
+        the provided geometrical properties.
+
 """
 
 import numpy as np
@@ -373,9 +376,9 @@ class rotationmap:
                 emission surface. Should be opposite sign to z0.
             phi (Optional[float]): Flaring angle correction term for the
                 emission surface.
-            tilt (Optional[float]): Value between -1 and 1, positive values
-                result in the north side of the disk being closer to the
-                observer; negative values the south.
+            tilt (Optional[float]): Value between -1 and 1, describing the
+                rotation of the disk. For negative values, the disk is rotating
+                clockwise on the sky.
             frame (Optional[str]): Frame of reference for the returned
                 coordinates. Either 'polar' or 'cartesian'.
 

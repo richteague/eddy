@@ -1,7 +1,7 @@
 """Functions to easily build example spectra to test the approach."""
 
 import numpy as np
-from eddy.annulus import ensemble
+from eddy.fit_annulus import annulus as annulus_class
 
 
 def gaussian_ensemble(vrot, Tb=40., dV=350., tau=None, rms=1., dV_chan=30.,
@@ -66,7 +66,7 @@ def gaussian_ensemble(vrot, Tb=40., dV=350., tau=None, rms=1., dV_chan=30.,
 
     # Plot the profiles to check they're OK and then return.
 
-    annulus = ensemble(spectra=spectra, theta=theta, velax=velax)
+    annulus = annulus_class(spectra=spectra, theta=theta, velax=velax)
     if plot:
         annulus.plot_spectra()
     if return_ensemble:
@@ -198,7 +198,7 @@ def flared_disk_ensemble(radius=1.0, inc=30., mstar=1.0, dist=100., Tb=40.,
 
     # Plot the profiles to check they're OK and then return.
 
-    annulus = ensemble(spectra=spectra, theta=tdisk, velax=velax)
+    annulus = annulus_class(spectra=spectra, theta=tdisk, velax=velax)
     if plot:
         annulus.plot_spectra()
     if return_ensemble:

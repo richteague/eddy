@@ -18,10 +18,6 @@ The main functions of interest are:
         line profile and thus works additionally for absorption lines and
         (hyper-)fine structure.
 
-Work in progress:
-
-    > Better river plot analyses.
-
 """
 
 import celerite
@@ -431,7 +427,7 @@ class annulus(object):
         """Estimate (x0, dV, Tb) for the spectrum."""
         if x.size != y.size:
             raise ValueError("Mismatch in array shapes.")
-        Tb = np.max(x)
+        Tb = np.max(y)
         x0 = x[y.argmax()]
         dV = np.trapz(y, x) / Tb / np.sqrt(2. * np.pi)
         return x0, dV, Tb
