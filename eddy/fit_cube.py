@@ -16,10 +16,6 @@ The main functions of interest are:
         various parameters constant or let them vary. Also allows for a flared
         emission surface which can be constrained with good quality data.
 
-Work in progress:
-
-    > Include bounds for the initial optimization.
-    > Can we do the deprojection analytically rather than iteratively?
 """
 
 import numpy as np

@@ -33,11 +33,11 @@ from scipy.optimize import minimize_scalar
 from scipy.interpolate import interp1d
 
 
-class ensemble(object):
+class annulus(object):
 
     def __init__(self, spectra, theta, velax, suppress_warnings=True,
                  remove_empty=True, sort_spectra=True):
-        """Initialize the class."""
+        """Initialize the class. Assume theta in [rad] and velax in [m/s]."""
 
         # Suppress warnings.
         if suppress_warnings:
@@ -141,7 +141,7 @@ class ensemble(object):
         if optimize:
             p0 = self._optimize_p0(p0, N=optimize, resample=resample, **kwargs)
             vref = p0[0]
-        p0 = ensemble._randomize_p0(p0, nwalkers, scatter)
+        p0 = annulus._randomize_p0(p0, nwalkers, scatter)
         if np.any(np.isnan(p0)):
             raise ValueError("WARNING: NaNs in the p0 array.")
 
@@ -156,9 +156,9 @@ class ensemble(object):
 
         # Diagnosis plots if appropriate.
         if plot_walkers:
-            ensemble._plot_walkers(sampler, nburnin)
+            annulus._plot_walkers(sampler, nburnin)
         if plot_corner:
-            ensemble._plot_corner(samples)
+            annulus._plot_corner(samples)
 
         # Return the perncetiles.
         percentiles = np.percentile(samples, [16, 50, 84], axis=0)
@@ -176,6 +176,10 @@ class ensemble(object):
         multiple times to iteratie to a global optimum. We only update p0 if
         both the minimization converged (res.success == True) and there is an
         improvement in the likelihood.
+
+        One can also pass all the options to optimize.minimize to try different
+        minimization techniques. The default values here were based on trial
+        and error.
 
         Args:
             p0 (ndarray): Initial guess of the starting positions.
@@ -334,7 +338,7 @@ class ensemble(object):
         x, y = self._get_masked_spectra(theta, resample=resample)
 
         # Build the GP model and calculate the log-likelihood.
-        gp = ensemble._build_kernel(x, y, theta)
+        gp = annulus._build_kernel(x, y, theta)
         if gp is None:
             return -np.inf
         ll = gp.log_likelihood(y, quiet=True)
@@ -342,7 +346,7 @@ class ensemble(object):
 
     def _lnprobability(self, theta, vref, resample=False):
         """Log-probability function for the MCMC."""
-        if ~np.isfinite(ensemble._lnprior(theta, vref)):
+        if ~np.isfinite(annulus._lnprior(theta, vref)):
             return -np.inf
         return self._lnlikelihood(theta, resample)
 
@@ -384,13 +388,13 @@ class ensemble(object):
                              weighted_SNR=True):
         """Return the negative SNR of the deprojected spectrum."""
         x, y = self.deprojected_spectrum(vrot, resample=resample)
-        x0, dx, A = ensemble._fit_gaussian(x, y)
+        x0, dx, A = annulus._fit_gaussian(x, y)
         noise = np.std(x[(x - x0) / dx > 3.0])  # Check: noise will vary.
         if signal == 'max':
             SNR = A / noise
         else:
             if weighted_SNR:
-                w = ensemble._gaussian(x, x0, dx, (np.sqrt(np.pi) * dx)**-1)
+                w = annulus._gaussian(x, x0, dx, (np.sqrt(np.pi) * dx)**-1)
             else:
                 w = np.ones(x.size)
             mask = (x - x0) / dx <= 1.0
@@ -436,8 +440,8 @@ class ensemble(object):
     def _fit_gaussian(x, y, dy=None, return_uncertainty=False):
         """Fit a gaussian to (x, y, [dy])."""
         try:
-            popt, cvar = curve_fit(ensemble._gaussian, x, y, sigma=dy,
-                                   p0=ensemble._get_p0_gaussian(x, y),
+            popt, cvar = curve_fit(annulus._gaussian, x, y, sigma=dy,
+                                   p0=annulus._get_p0_gaussian(x, y),
                                    absolute_sigma=True, maxfev=100000)
             cvar = np.diag(cvar)
         except Exception:
@@ -450,7 +454,7 @@ class ensemble(object):
     @staticmethod
     def _get_gaussian_width(x, y, fill_value=1e50):
         """Return the absolute width of a Gaussian fit to the spectrum."""
-        dV = ensemble._fit_gaussian(x, y)[1]
+        dV = annulus._fit_gaussian(x, y)[1]
         if np.isfinite(dV):
             return abs(dV)
         return fill_value
@@ -458,7 +462,7 @@ class ensemble(object):
     @staticmethod
     def _get_gaussian_center(x, y):
         """Return the line center from a Gaussian fit to the spectrum."""
-        x0 = ensemble._fit_gaussian(x, y)[0]
+        x0 = annulus._fit_gaussian(x, y)[0]
         if np.isfinite(x0):
             return abs(x0)
         return x[np.argmax(y)]
@@ -467,7 +471,7 @@ class ensemble(object):
         """Return the spectrum from a Gaussian fit."""
         x, y = self.deprojected_spectrum(vrot, resample=resample)
         mask = np.logical_and(x >= self.velax[0], x <= self.velax[-1])
-        return ensemble._get_gaussian_width(x[mask], y[mask])
+        return annulus._get_gaussian_width(x[mask], y[mask])
 
     # -- Line Profile Functions -- #
 
@@ -481,7 +485,7 @@ class ensemble(object):
         """Optically thick line profile."""
         if tau <= 0.0:
             raise ValueError("Must have positive tau.")
-        return Tex * (1. - np.exp(-ensemble._gaussian(x, x0, dV, tau)))
+        return Tex * (1. - np.exp(-annulus._gaussian(x, x0, dV, tau)))
 
     @staticmethod
     def _SHO(x, A, y0):
@@ -548,7 +552,7 @@ class ensemble(object):
                     for spectrum in spectra]
             vmax = np.array(vmax)
         elif method == 'gaussian':
-            vmax = [ensemble._get_gaussian_center(velax, spectrum)
+            vmax = [annulus._get_gaussian_center(velax, spectrum)
                     for spectrum in spectra]
             vmax = np.array(vmax)
         else:
@@ -581,10 +585,10 @@ class ensemble(object):
             return vrot, vlsr
         try:
             if fix_theta:
-                return curve_fit(ensemble._SHO, self.theta, vpeaks,
+                return curve_fit(annulus._SHO, self.theta, vpeaks,
                                  p0=[vrot, vlsr], maxfev=10000)[0]
             else:
-                return curve_fit(ensemble._SHOb, self.theta, vpeaks,
+                return curve_fit(annulus._SHOb, self.theta, vpeaks,
                                  p0=[vrot, vlsr, 0.0], maxfev=10000)[0]
         except Exception:
             return vrot, vlsr
@@ -655,7 +659,7 @@ class ensemble(object):
             scatter = np.nanstd(sgrid, axis=0)
             sgrid -= np.nanmean(sgrid, axis=0)[None, :]
 
-        ax = ensemble._make_axes(ax)
+        ax = annulus._make_axes(ax)
 
         if imshow:
             im = ax.imshow(sgrid, origin='lower', interpolation='nearest',
@@ -691,7 +695,7 @@ class ensemble(object):
 
     def plot_spectra(self, ax=None):
         """Plot all the spectra."""
-        ax = ensemble._make_axes(ax)
+        ax = annulus._make_axes(ax)
         for spectrum in self.spectra:
             ax.step(self.velax, spectrum, where='mid', color='k')
         ax.set_xlabel('Velocity')
