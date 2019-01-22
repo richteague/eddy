@@ -20,13 +20,19 @@ The main functions of interest are:
 
 """
 
-import celerite
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import binned_statistic
 from scipy.optimize import curve_fit
 from scipy.optimize import minimize_scalar
 from scipy.interpolate import interp1d
+
+# Check is 'celerite' is installed.
+try:
+    import celerite
+    celerite_installed = True
+except ImportError:
+    celerite_installed = False
 
 
 class annulus(object):
@@ -113,6 +119,10 @@ class annulus(object):
                 True otherwise just for the rotation velocity.
 
         """
+
+        # Check is celerite is installed.
+        if not celerite_installed:
+            raise ImportError("Must install 'celerite' to use GP method.")
 
         # Import emcee for the MCMC.
         import emcee
@@ -504,18 +514,21 @@ class annulus(object):
             spectra += [shifted(self.velax)]
         return np.squeeze(spectra)
 
-    def deprojected_spectrum(self, vrot, resample=False):
+    def deprojected_spectrum(self, vrot, resample=False, scatter=False):
         """Returns (x, y) of collapsed deprojected spectrum."""
         vpnts = self.velax[None, :] - vrot * np.cos(self.theta)[:, None]
         vpnts, spnts = self._order_spectra(vpnts=vpnts.flatten())
-        return self._resample_spectra(vpnts, spnts, resample=resample)
+        return self._resample_spectra(vpnts, spnts, resample=resample,
+                                      scatter=scatter)
 
-    def deprojected_spectrum_maximum(self, resample=False, method='quadratic'):
+    def deprojected_spectrum_maximum(self, resample=False, method='quadratic',
+                                     scatter=False):
         """Deprojects data such that their max values are aligned."""
         vmax = self.line_centroids(method=method)
         vpnts = np.array([self.velax - dv for dv in vmax - np.median(vmax)])
         vpnts, spnts = self._order_spectra(vpnts=vpnts.flatten())
-        return self._resample_spectra(vpnts, spnts, resample=resample)
+        return self._resample_spectra(vpnts, spnts, resample=resample,
+                                      scatter=scatter)
 
     def line_centroids(self, method='quadratic', spectra=None, velax=None):
         """
@@ -543,7 +556,10 @@ class annulus(object):
         if method == 'max':
             vmax = np.take(velax, np.argmax(spectra, axis=1))
         elif method == 'quadratic':
-            from bettermoments.methods import quadratic
+            try:
+                from bettermoments.methods import quadratic
+            except ImportError:
+                raise ImportError("Please install 'bettermoments'.")
             vmax = [quadratic(spectrum, x0=velax[0], dx=np.diff(velax)[0])[0]
                     for spectrum in spectra]
             vmax = np.array(vmax)
@@ -563,14 +579,18 @@ class annulus(object):
         idxs = np.argsort(vpnts)
         return vpnts[idxs], spnts[idxs]
 
-    def _resample_spectra(self, vpnts, spnts, resample=False):
+    def _resample_spectra(self, vpnts, spnts, resample=False, scatter=False):
         """Resample the spectra."""
         if not resample:
             return vpnts, spnts
         bins = self.velax.size * resample + 1
         bins = np.linspace(self.velax[0], self.velax[-1], int(bins))
         y, x, _ = binned_statistic(vpnts, spnts, statistic='mean', bins=bins)
-        return np.average([x[1:], x[:-1]], axis=0), y
+        x = np.average([x[1:], x[:-1]], axis=0)
+        if not scatter:
+            return x, y
+        dy, _, _ = binned_statistic(vpnts, spnts, statistic='std', bins=bins)
+        return x, y, dy
 
     def guess_parameters(self, fit=True, fix_theta=True, method='quadratic'):
         """Guess vrot and vlsr from the spectra.."""
@@ -646,7 +666,8 @@ class annulus(object):
             toplot = self.spectra
         else:
             toplot = self.deprojected_spectra(vrot)
-        vgrid, tgrid, sgrid = self._grid_river(spnts=toplot, tgrid=tgrid,
+        vgrid, tgrid, sgrid = self._grid_river(spnts=toplot,
+                                               tgrid=tgrid,
                                                vgrid=vgrid)
         if normalize:
             sgrid /= np.nanmax(sgrid, axis=1)[:, None]
