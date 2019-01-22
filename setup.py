@@ -8,7 +8,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name="eddy",
-    version="1.0",
+    version="1.1",
     author="Richard Teague",
     author_email="rteague@umich.edu",
     description=("Tools to recover expectionally precise rotation curves from "
@@ -18,7 +18,7 @@ setup(
     url="https://github.com/richteague/eddy",
     packages=["eddy"],
     license="MIT",
-    install_requires=["scipy", "numpy", "matplotlib", "emcee"],
+    install_requires=["scipy", "numpy", "matplotlib", "emcee", "corner"],
     classifiers=[
         "Programming Language :: Python :: 3.6",
         "License :: OSI Approved :: MIT License",

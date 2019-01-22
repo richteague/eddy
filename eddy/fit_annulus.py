@@ -530,7 +530,7 @@ class annulus(object):
         return self._resample_spectra(vpnts, spnts, resample=resample,
                                       scatter=scatter)
 
-    def line_centroids(self, method='quadratic', spectra=None, velax=None):
+    def line_centroids(self, method='max', spectra=None, velax=None):
         """
         Return the velocities of the peak pixels.
 
