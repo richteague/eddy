@@ -1,5 +1,5 @@
 ---
-title: 'Eddy: Extracting Disk Dynamics'
+title: 'eddy: Extracting Protoplanetary Disk Dynamics with Python'
 tags:
   - Python
   - astronomy
