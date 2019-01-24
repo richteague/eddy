@@ -75,7 +75,7 @@ class annulus(object):
         self.channel = np.diff(velax)[0]
         self.velax_range = (self.velax[0] - 0.5 * self.channel,
                             self.velax[-1] + 0.5 * self.channel)
-        self.velax_mask = np.percentile(self.velax, [30, 70])
+        self.velax_mask = np.array([self.velax[0], self.velax[-1]])
 
     # -- Rotation Velocity by Gaussian Process Modelling -- #
 

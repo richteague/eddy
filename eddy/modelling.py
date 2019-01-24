@@ -5,8 +5,8 @@ from eddy.fit_annulus import annulus as annulus_class
 
 
 def gaussian_ensemble(vrot, Tb=40., dV=350., tau=None, rms=1., dV_chan=30.,
-                      N=10, PAmin=-np.pi, PAmax=np.pi, linear_sample=True,
-                      plot=True, return_ensemble=False):
+                      N=10, oversample=False, PAmin=-np.pi, PAmax=np.pi,
+                      linear_sample=True, plot=True, return_ensemble=False):
     """
     Model an ensemble of optically thick or thin Gaussian line profiles.
 
@@ -19,6 +19,9 @@ def gaussian_ensemble(vrot, Tb=40., dV=350., tau=None, rms=1., dV_chan=30.,
     rms             : RMS of the noise in (K).
     dV_chan         : Channel width for the velocity axis (m/s).
     N               : Number of spectra to generate in the ensemble.
+    oversample      : If provided, oversample the spectral resolution when
+                      building the line profiles to account for low-resolution
+                      effects.
     PAmin           : Minimum polar angle to consider.
     PAmax           : Maximum polar angle to consider.
     linear_sample   : Linearlly sample the position angles or draw randomly.
@@ -59,9 +62,19 @@ def gaussian_ensemble(vrot, Tb=40., dV=350., tau=None, rms=1., dV_chan=30.,
     v_los = vrot * np.cos(theta)
     if tau is not None:
         Tex = Tb / (1. - np.exp(-tau))
-        spectra = _thick_line(velax[None, :], v_los[:, None], dV, Tex, tau)
+        if oversample:
+            N = int(oversample)
+            spectra = [_thick_line(velax, v, dV, Tex, tau, N=N) for v in v_los]
+            spectra = np.array(spectra)
+        else:
+            spectra = _thick_line(velax[None, :], v_los[:, None], dV, Tex, tau)
     else:
-        spectra = _gaussian(velax[None, :], v_los[:, None], dV, Tb)
+        if oversample:
+            N = int(oversample)
+            spectra = [_gaussian(velax, v, dV, Tb, N=N) for v in v_los]
+            spectra = np.array(spectra)
+        else:
+            spectra = _gaussian(velax[None, :], v_los[:, None], dV, Tb)
     spectra += rms * np.random.randn(spectra.size).reshape(spectra.shape)
 
     # Plot the profiles to check they're OK and then return.
@@ -206,14 +219,22 @@ def flared_disk_ensemble(radius=1.0, inc=30., mstar=1.0, dist=100., Tb=40.,
     return spectra, tdisk, velax, vrot
 
 
-def _gaussian(x, x0, dx, A):
-    """Simple Gaussian function."""
-    return A * np.exp(-np.power((x - x0) / dx, 2))
+def _gaussian(x, x0, dx, A, N=False):
+    """Simple Gaussian function with oversampling."""
+    if not N:
+        return A * np.exp(-np.power((x - x0) / dx, 2))
+    xx = np.linspace(x[0], x[-1], x.size * int(N))
+    yy = A * np.exp(-np.power((xx - x0) / dx, 2))
+    return np.array([np.average(yy[i*N:(i+1)*N]) for i in range(x.size)])
 
 
-def _thick_line(x, x0, dx, Tex, tau):
+def _thick_line(x, x0, dx, Tex, tau, N=False):
     """Optically thick line profile."""
-    return Tex * (1. - np.exp(-_gaussian(x, x0, dx, tau)))
+    if not N:
+        return Tex * (1. - np.exp(-_gaussian(x, x0, dx, tau, N=1)))
+    xx = np.linspace(x[0], x[-1], x.size * int(N))
+    yy = Tex * (1. - np.exp(-_gaussian(xx, x0, dx, tau, N=False)))
+    return np.array([np.average(yy[i*N:(i+1)*N]) for i in range(x.size)])
 
 
 def _disk_to_sky(xdisk, ydisk, zdisk, inc):
