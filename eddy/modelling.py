@@ -62,19 +62,11 @@ def gaussian_ensemble(vrot, Tb=40., dV=350., tau=None, rms=1., dV_chan=30.,
     v_los = vrot * np.cos(theta)
     if tau is not None:
         Tex = Tb / (1. - np.exp(-tau))
-        if oversample:
-            N = int(oversample)
-            spectra = [_thick_line(velax, v, dV, Tex, tau, N=N) for v in v_los]
-            spectra = np.array(spectra)
-        else:
-            spectra = _thick_line(velax[None, :], v_los[:, None], dV, Tex, tau)
+        spectra = [_thick_line(velax, v, dV, Tex, tau, N=N) for v in v_los]
+        spectra = np.array(spectra)
     else:
-        if oversample:
-            N = int(oversample)
-            spectra = [_gaussian(velax, v, dV, Tb, N=N) for v in v_los]
-            spectra = np.array(spectra)
-        else:
-            spectra = _gaussian(velax[None, :], v_los[:, None], dV, Tb)
+        spectra = [_gaussian(velax, v, dV, Tb, N=N) for v in v_los]
+        spectra = np.array(spectra)
     spectra += rms * np.random.randn(spectra.size).reshape(spectra.shape)
 
     # Plot the profiles to check they're OK and then return.
