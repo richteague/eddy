@@ -39,7 +39,22 @@ class annulus(object):
 
     def __init__(self, spectra, theta, velax, suppress_warnings=True,
                  remove_empty=True, sort_spectra=True):
-        """Initialize the class. Assume theta in [rad] and velax in [m/s]."""
+        """
+        Initialize the class.
+
+        Args:
+            spectra (ndarray): Array of shape [N, M] of spectra to shift and
+                fit, where N is the number of spectra and M is the length of
+                the velocity axis.
+            theta (ndarray): Polar angles in [rad] of each of the spectra. Note
+                that spectra.shape[0] == theta.shape[0].
+            velax (ndarray): Velocity axis in [m/s] of the spectra. Note that
+                spectra.shape[1] == velax.shape[0].
+            suppress_warnings (optional[bool]): If True, suppress all warnings.
+            remove_empty (optional[bool]): Remove empty spectra.
+            sort_spectra (optional[bool]): Sorted the spectra into increasing
+                polar angle.
+        """
 
         # Suppress warnings.
         if suppress_warnings:
