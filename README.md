@@ -6,7 +6,7 @@
 
 `eddy` is a suite of Python tools to recover precise rotation profiles of protoplanetary disks from Doppler shifted line emission. `eddy` makes fitting of first moment maps and the inference of a rotation velocity from an annulus of spectra a breeze.
 
-#### Installation
+## Installation
 
 To install the `eddy` packge, first clone the directory, then in the main directory,
 
@@ -20,12 +20,28 @@ If things have installed correctly you should be able to run the [Jupyter Notebo
 
 Something which is `pip` installable is currently work in progress.
 
-#### Useage
+## Useage
 
 For guides on how to use `eddy` you will find extensive examples in the [documents](https://github.com/richteague/eddy/tree/master/docs).
 
 In brief, `fit_annulus` contains the functionality to infer the rotation profile from an annulus of Doppler shifted spectra, as discussed in [Teague et al. (2018a,](https://ui.adsabs.harvard.edu/#abs/2018ApJ...860L..12T/abstract)[b)](https://ui.adsabs.harvard.edu/#abs/2018ApJ...868..113T/abstract). Functions to fit the rotation map (we shameless recommend [bettermoments](https://github.com/richteague/bettermoments) to make these), including a flared surface geometry can be found in `fit_cube`. This also contains the functionality to deproject images using the geometrical properties of the best fit model.
 
-#### Attribution
+## Attribution
 
-Coming soon.
+If you use `eddy` as part of your research, please cite the [JOSS paper](http://joss.theoj.org/papers/10.21105/joss.01220) as:
+
+```
+@article{eddy,
+     doi = {10.21105/joss.01220},
+     url = {https://doi.org/10.21105/joss.01220},
+     year = {2019},
+     month = {feb},
+     publisher = {The Open Journal},
+     volume = {4},
+     number = {34},
+     pages = {1220},
+     author = {Richard Teague},
+     title = {eddy},
+     journal = {The Journal of Open Source Software}
+}
+```
