@@ -28,20 +28,48 @@ In brief, `fit_annulus` contains the functionality to infer the rotation profile
 
 ## Attribution
 
-If you use `eddy` as part of your research, please cite the [JOSS paper](http://joss.theoj.org/papers/10.21105/joss.01220) as:
+If you use `eddy` as part of your research, please cite the [JOSS paper](http://joss.theoj.org/papers/10.21105/joss.01220):
 
 ```
 @article{eddy,
-     doi = {10.21105/joss.01220},
-     url = {https://doi.org/10.21105/joss.01220},
-     year = {2019},
-     month = {feb},
-     publisher = {The Open Journal},
-     volume = {4},
-     number = {34},
-     pages = {1220},
-     author = {Richard Teague},
-     title = {eddy},
-     journal = {The Journal of Open Source Software}
+    doi = {10.21105/joss.01220},
+    url = {https://doi.org/10.21105/joss.01220},
+    year = {2019},
+    month = {feb},
+    publisher = {The Open Journal},
+    volume = {4},
+    number = {34},
+    pages = {1220},
+    author = {Richard Teague},
+    title = {eddy},
+    journal = {The Journal of Open Source Software}
+}
+```
+
+If you made use of the MCMC and Gaussian Processes, then please also cite these dependancies which really made it happen:
+
+```
+@article{emcee,
+    author = {{Foreman-Mackey}, D. and {Hogg}, D.~W. and {Lang}, D. and {Goodman}, J.},
+    title = {emcee: The MCMC Hammer},
+    journal = {PASP},
+    year = 2013,
+    volume = 125,
+    pages = {306-312},
+    eprint = {1202.3665},
+    doi = {10.1086/670067}
+}
+
+@article{celerite,
+    author = {{Foreman-Mackey}, D. and {Agol}, E. and {Angus}, R. and
+              {Ambikasaran}, S.},
+    title = {Fast and scalable Gaussian process modeling
+             with applications to astronomical time series},
+    year = {2017},
+    journal = {AJ},
+    volume = {154},
+    pages = {220},
+    doi = {10.3847/1538-3881/aa9332},
+    url = {https://arxiv.org/abs/1703.09710}
 }
 ```
