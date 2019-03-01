@@ -94,7 +94,8 @@ class rotationmap:
     def fit_keplerian(self, p0, params, r_min=None, r_max=None, optimize=True,
                       nwalkers=None, nburnin=300, nsteps=100, scatter=1e-3,
                       plot_walkers=True, plot_corner=True, plot_bestfit=True,
-                      plot_residual=True, return_samples=False):
+                      plot_residual=True, return_samples=False,
+                      return_dict=True):
         """
         Fit a Keplerian rotation profile to the data.
 
@@ -138,12 +139,17 @@ class rotationmap:
                 the posterior distribution after the burn in period, otherwise
                 just return the 16th, 50th and 84th percentiles of each
                 posterior distribution.
+            return_dict (Optional[bool]): If true, return a dictionary of the
+                geometrical parameters which will be accepted in other
+                functions.
 
         Returns:
-            samples (ndarray): If return_sample = True, return all the samples
-                of the posterior distribution after the burn in period,
-                otherwise just return the 16th, 50th and 84th percentiles of
-                each posterior distribution.
+            to_return (list): Always returns the 16th, 50th and 84th
+                percentiles of the posterior distributions. If return_sample is
+                True then it will return all the samples of the posterior
+                distribution after the burn in period. If return_dict is True
+                then will also provide a dictionary of geometrical parameters
+                accepted in other functions.
         """
 
         # Load up emcee.
@@ -205,6 +211,7 @@ class rotationmap:
 
         bestfit = np.median(samples, axis=0)
         bestfit = rotationmap._populate_dictionary(bestfit, params)
+        bestfit = self._verify_dictionary(bestfit)
 
         # Diagnostic plots.
         if plot_walkers:
@@ -216,10 +223,13 @@ class rotationmap:
         if plot_residual:
             self.plot_residual(bestfit, ivar=self.ivar)
 
-        # Return the posterior distributions.
+        # Generate the output.
+        to_return = [np.percentile(samples, [16, 60, 84], axis=0)]
         if return_samples:
-            return samples
-        return np.percentile(samples, [16, 60, 84], axis=0)
+            to_return += [samples]
+        if return_dict:
+            to_return += [bestfit]
+        return to_return
 
     def _optimize_p0(self, theta, params):
         """Optimize the initial starting positions."""
@@ -354,7 +364,7 @@ class rotationmap:
     # -- Deprojection functions. -- #
 
     def disk_coords(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
-                    z1=0.0, phi=0.0, tilt=0.0, frame='polar'):
+                    z1=0.0, phi=0.0, tilt=0.0, frame='polar', **kwargs):
         """
         Get the disk coordinates given certain geometrical parameters and an
         emission surface. The emission surface is parameterized as a powerlaw
@@ -399,7 +409,7 @@ class rotationmap:
 
         def func(r):
             z = z0 * np.power(r, psi) + z1 * np.power(r, phi)
-            return np.where(z >= 0.0, z, 0.0)
+            return z
 
         # Calculate the pixel values.
 
@@ -412,7 +422,7 @@ class rotationmap:
         return c1, c2, c3
 
     def deproject_image(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=1.0,
-                        z1=0.0, phi=0.0, tilt=0.0, image=None):
+                        z1=0.0, phi=0.0, tilt=0.0, image=None, **kwargs):
         """
         Deproject the image given the geometrical parameters. If no image is
         given, will used the attached rotation map.
@@ -521,7 +531,8 @@ class rotationmap:
     # -- Functions to build Keplerian rotation profiles. -- #
 
     def keplerian(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
-                  z1=0.0, phi=1.0, tilt=0.0, mstar=1.0, dist=100., vlsr=0.0):
+                  z1=0.0, phi=1.0, tilt=0.0, mstar=1.0, dist=100., vlsr=0.0,
+                  **kwargs):
         """
         Return a Keplerian rotation profile (not including pressure) in [m/s].
         This includes the deivation due to non-zero heights above the midplane,
@@ -700,6 +711,23 @@ class rotationmap:
         cb.set_label(r'${\rm  v_{Obs} - v_{Kep} \quad (km\,s^{-1})}$',
                      rotation=270, labelpad=15)
         self._gentrify_plot(ax)
+
+    def plot_surface(self, ax=None, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0,
+                     psi=0.0, z1=0.0, phi=1.0, tilt=0.0, r_min=0.0,
+                     r_max=None, **kwargs):
+        """Overplot the emission surface."""
+        if ax is None:
+            import matplotlib.pyplot as plt
+            ax = plt.subplots()[1]
+
+        rfront, tfront, _ = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA,
+                                             z0=z0, psi=psi, z1=z1, phi=phi,
+                                             tilt=tilt)
+        rback, tback, _ = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA,
+                                           z0=-z0, psi=psi, z1=-z1, phi=phi,
+                                           tilt=tilt)
+
+        ax.contourf(self.xaxis, self.yaxis, )
 
     @staticmethod
     def plot_walkers(samples, nburnin=None, labels=None):

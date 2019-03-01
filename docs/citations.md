@@ -21,8 +21,7 @@ If you use `eddy`, please include the reference to the JOSS [article](http://jos
 In addition, if you used any of the fitting routines then please also cite the following dependencies, without which `eddy` couldn't work.
 
 ```latex
-% emcee for the MCMC sampler
-@article{emcee,
+@article{emcee, % for the MCMC sampler
     author = {{Foreman-Mackey}, D. and {Hogg}, D.~W. and {Lang}, D. and {Goodman}, J.},
     title = {emcee: The MCMC Hammer},
     journal = {PASP},
@@ -33,8 +32,7 @@ In addition, if you used any of the fitting routines then please also cite the f
     doi = {10.1086/670067}
 }
 
-% celerite for the gaussian procceses.
-@article{celerite,
+@article{celerite, % for the gaussian procceses
     author = {{Foreman-Mackey}, D. and {Agol}, E. and {Angus}, R. and
               {Ambikasaran}, S.},
     title = {Fast and scalable Gaussian process modeling
@@ -45,5 +43,19 @@ In addition, if you used any of the fitting routines then please also cite the f
     pages = {220},
     doi = {10.3847/1538-3881/aa9332},
     url = {https://arxiv.org/abs/1703.09710}
+}
+
+@article{corner, % for the covariance plots
+    doi = {10.21105/joss.00024},
+    url = {https://doi.org/10.21105/joss.00024},
+    year  = {2016},
+    month = {jun},
+    publisher = {The Open Journal},
+    volume = {1},
+    number = {2},
+    pages = {24},
+    author = {Daniel Foreman-Mackey},
+    title = {corner.py: Scatterplot matrices in Python},
+    journal = {The Journal of Open Source Software}
 }
 ```
