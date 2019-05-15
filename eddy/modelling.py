@@ -4,36 +4,42 @@ import numpy as np
 from eddy.fit_annulus import annulus as annulus_class
 
 
-def gaussian_ensemble(vrot, Tb=40., dV=350., tau=None, rms=1., dV_chan=30.,
-                      N=10, oversample=False, PAmin=-np.pi, PAmax=np.pi,
-                      linear_sample=True, plot=True, return_ensemble=False):
+def gaussian_ensemble(vrot, vrad=0.0, Tb=40., dV=350., tau=None, rms=0.0,
+                      dV_chan=30., N=10, oversample=False, PAmin=-np.pi,
+                      PAmax=np.pi, linear_sample=True, plot=True,
+                      return_annulus=False):
     """
     Model an ensemble of optically thick or thin Gaussian line profiles.
 
-    - Inputs -
+    Args:
+        vrot (float): Rotation velocity at the given radius [m/s].
+        vrad (optional[float]): Radial velocity at the given radius [m/s].
+        Tb (float): Peak brightness temperature for the lines [K].
+        dV (float): Doppler linewidth in [m/s].
+        tau (optional[float]): Optical depth. If no optical depth is given,
+            assume a purely Gaussian profile.
+        rms (optional[float]): RMS of the noise in [K].
+        dV_chan (optional[float]): Channel width for the velocity axis [m/s].
+        N (int): Number of spectra to generate in the ensemble.
+        oversample (bool): If provided, oversample the spectral resolution by
+            this amount when building the line profiles to account for
+            low-resolution effects.
+        PAmin (optional[float]): Minimum polar angle in [rad] to consider.
+        PAmax (optional[float]): Maximum polar angle in [rad] to consider.
+        linear_sample (optional[bool]): Linearlly sample the position angles or
+            draw randomly from the PA range given.
+        plot (optional[bool]): If true, plot the ensemble of spectra.
+        return_annulus (optional[bool]): If true, return a pre-initialised
+            annulus instance.
 
-    vrot            : Rotation velocity at the given radius (m/s).
-    Tb              : Peak brightness temperature for the lines (K).
-    dV              : Doppler linewidth in (m/s).
-    tau             : Optical depth.
-    rms             : RMS of the noise in (K).
-    dV_chan         : Channel width for the velocity axis (m/s).
-    N               : Number of spectra to generate in the ensemble.
-    oversample      : If provided, oversample the spectral resolution when
-                      building the line profiles to account for low-resolution
-                      effects.
-    PAmin           : Minimum polar angle to consider.
-    PAmax           : Maximum polar angle to consider.
-    linear_sample   : Linearlly sample the position angles or draw randomly.
-    plot            : Plot the ensemble.
-    return_ensemble : Return a pre-initialised ensemble instance.
+    Returns (if return_annulus is False):
+        spectra (ndarray[float]): [theta.size, velax.size] shaped array of the
+            spectra in [K].
+        theta (ndarray[float]): Array of polar angles of spectra [rad].
+        velax (ndarray[float]): Velocity axis in [m/s].
 
-    - Outputs -
-
-    spectra         : [N, velax.size] shaped array of the spectra in (K).
-    theta           : Array of polar angles of spectra (radians).
-    velax           : Velocity axis in (m/s).
-
+    Returns (if return_annulus is True):
+        annulus (annulus instance): Pre-initialized annnulus instance.
     """
 
     # Take a velocity axis that is twice the shift due to the rotation and
@@ -59,7 +65,7 @@ def gaussian_ensemble(vrot, Tb=40., dV=350., tau=None, rms=1., dV_chan=30.,
 
     # Build the line profiles.
 
-    v_los = vrot * np.cos(theta)
+    v_los = vrot * np.cos(theta) + vrad * np.sin(theta)
     if tau is not None:
         Tex = Tb / (1. - np.exp(-tau))
         spectra = [_thick_line(velax, v, dV, Tex, tau, N=N) for v in v_los]
@@ -74,7 +80,7 @@ def gaussian_ensemble(vrot, Tb=40., dV=350., tau=None, rms=1., dV_chan=30.,
     annulus = annulus_class(spectra=spectra, theta=theta, velax=velax)
     if plot:
         annulus.plot_spectra()
-    if return_ensemble:
+    if return_annulus:
         return annulus
     return spectra, theta, velax
 
