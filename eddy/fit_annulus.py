@@ -56,7 +56,9 @@ class annulus(object):
 
         # Remove empty pixels.
         if remove_empty:
-            idxs = np.sum(self.spectra, axis=-1) > 0.0
+            idxa = np.sum(self.spectra, axis=-1) > 0.0
+            idxb = np.std(self.spectra, axis=-1) != 0.0
+            idxs = idxa & idxb
             self.theta = self.theta[idxs]
             self.spectra = self.spectra[idxs]
 
@@ -120,7 +122,8 @@ class annulus(object):
                 posterior disitrbutions rather than the [16, 50, 84]
                 percentiles.
         Returns:
-            TBD
+            res: The results of the optimization, depending on the method
+                chosen and the various parameters.
         """
 
         # Check the input variables.
@@ -443,8 +446,8 @@ class annulus(object):
         hyperparams = theta[-3:]
 
         # Deproject the data and resample if requested.
-        vlos = self.calc_vlos(vrot=vrot, vrad=vrad)
-        x, y = self.deprojected_spectrum(vlos, resample=resample)
+        x, y = self.deprojected_spectrum(vrot=vrot, vrad=vrad,
+                                         resample=resample)
         x, y = self.get_masked_spectrum(x, y)
 
         # Build the GP model and calculate the log-likelihood.
@@ -574,8 +577,8 @@ class annulus(object):
             vrot, vrad = theta
         else:
             vrot, vrad = theta, 0.0
-        vlos = self.calc_vlos(vrot=vrot, vrad=vrad)
-        x, y = self.deprojected_spectrum(vlos, resample=resample)
+        x, y = self.deprojected_spectrum(vrot=vrot, vrad=vrad,
+                                         resample=resample)
         x, y = self.get_masked_spectrum(x, y)
         return annulus._get_gaussian_width(x, y)
 
@@ -620,8 +623,10 @@ class annulus(object):
         return np.array([np.interp(self.velax, self.velax - dv, spectra)
                          for dv, spectra in zip(vlos, self.spectra)])
 
-    def deprojected_spectrum(self, vlos, resample=False, scatter=False):
+    def deprojected_spectrum(self, vrot, vrad=0.0, resample=False,
+                             scatter=False):
         """Returns (x, y) of collapsed deprojected spectrum."""
+        vlos = self.calc_vlos(vrot=vrot, vrad=vrad)
         vpnts = self.velax[None, :] - vlos[:, None]
         vpnts, spnts = self._order_spectra(vpnts=vpnts.flatten())
         return self._resample_spectra(vpnts, spnts, resample=resample,
@@ -697,7 +702,9 @@ class annulus(object):
             dy (ndarray/None): Standard deviation of the bin.
         """
         if not resample:
-            return vpnts, spnts
+            if not scatter:
+                return vpnts, spnts
+            return vpnts, spnts, np.zeros(vpnts.size)
         if isinstance(resample, (int, bool)):
             bins = int(self.velax.size * int(resample) + 1)
             bins = np.linspace(self.velax[0], self.velax[-1], bins)

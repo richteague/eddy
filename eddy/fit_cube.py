@@ -33,8 +33,10 @@ class rotationmap:
 
     msun = 1.988e30
     fwhm = 2. * np.sqrt(2 * np.log(2))
+    priors = {}
 
-    def __init__(self, path, uncertainty=None, clip=None, downsample=None):
+    def __init__(self, path, uncertainty=None, clip=None, downsample=None,
+                 unit='m/s'):
         """
         Read in the velocity maps and initialize the class. To make the fitting
         quicker, we can clip the cube to a smaller region, or downsample the
@@ -50,7 +52,8 @@ class rotationmap:
             downsample (Optional[int]): Downsample the image by this factor for
                 quicker fitting. For example, using downsample=4 on an image
                 which is 1000 x 1000 pixels will reduce it to 250 x 250 pixels.
-
+            unit (Optional[str]): Unit of the input data cube. By deafult
+                assumed to be [m/s].
         Returns:
             None
         """
@@ -66,10 +69,12 @@ class rotationmap:
             self.error = 0.1 * self.data
         self.error = np.where(np.isnan(self.error), 0.0, self.error)
 
-        # Make sure the data is in [km/s].
-        if np.nanmedian(self.data) > 10.0:
+        # Convert the data to [km/s].
+        if unit.lower() == 'm/s':
             self.data /= 1e3
             self.error /= 1e3
+        elif unit.lower() != 'km/s':
+            raise ValueError("unit must me 'm/s' or 'km/s'.")
 
         self.xaxis = self._read_position_axis(a=1)
         self.yaxis = self._read_position_axis(a=2)
@@ -88,6 +93,9 @@ class rotationmap:
 
         # Beam parameters.
         self._readbeam()
+
+        # Set priors.
+        self.set_default_priors()
 
     # -- Fitting functions. -- #
 
@@ -270,35 +278,49 @@ class rotationmap:
     def _ln_probability(self, theta, *params_in):
         """Log-probablility function."""
         model = rotationmap._populate_dictionary(theta, params_in[0])
-        if np.isfinite(self._ln_prior(model)):
-            return self._ln_likelihood(model)
+        lnp = self._ln_prior(model)
+        if np.isfinite(lnp):
+            return lnp + self._ln_likelihood(model)
         return -np.inf
 
+    def set_prior(self, param, args, type='flat'):
+        """Set the prior for the given parameter."""
+        type = type.lower()
+        if type not in ['flat', 'gaussian']:
+            raise ValueError("type must be 'flat' or 'gaussian'.")
+        if type == 'flat':
+            def prior(p):
+                if not args[0] <= p <= args[1]:
+                    return -np.inf
+                return np.log(1.0 / (args[1] - args[0]))
+        else:
+            def prior(p):
+                lnp = np.exp(-0.5 * ((args[0] - p) / args[1])**2)
+                return np.log(lnp / np.sqrt(2. * np.pi) / args[1])
+        rotationmap.priors[param] = prior
+
+    def set_default_priors(self):
+        """Set the default priors."""
+        self.set_prior('x0', [-0.5, 0.5], 'flat')
+        self.set_prior('y0', [-0.5, 0.5], 'flat')
+        self.set_prior('inc', [0., 90.0], 'flat')
+        self.set_prior('PA', [-360., 360.], 'flat')
+        self.set_prior('mstar', [0.1, 5.], 'flat')
+        self.set_prior('vlsr', [np.nanmin(self.data) * 1e3,
+                                np.nanmax(self.data) * 1e3], 'flat')
+        self.set_prior('z0', [0., 10.], 'flat')
+        self.set_prior('psi', [0., 5.], 'flat')
+        self.set_prior('z1', [-10., 10.], 'flat')
+        self.set_prior('phi', [0., 5.], 'flat')
+        self.set_prior('tilt', [-1., 1.], 'flat')
+
     def _ln_prior(self, params):
-        """Log-priors. Uniform and uninformative."""
-        if abs(params['x0']) > 0.5:
-            return -np.inf
-        if abs(params['y0']) > 0.5:
-            return -np.inf
-        if not 0. < params['inc'] < 90.:
-            return -np.inf
-        if not -360. < params['PA'] < 360.:
-            return -np.inf
-        if not 0.0 < params['mstar'] < 5.0:
-            return -np.inf
-        if abs(self.vlsr - params['vlsr'] / 1e3) > 1.0:
-            return -np.inf
-        if not 0. <= params['z0'] < 10.:
-            return -np.inf
-        if not 0. < params['psi'] < 5.:
-            return -np.inf
-        if not -10. <= params['z1'] <= 10.:
-            return -np.inf
-        if not 0. < params['phi'] < 5.:
-            return -np.inf
-        if not -1. < params['tilt'] < 1.:
-            return -np.inf
-        return 0.0
+        """Log-priors."""
+        lnp = 0.0
+        for key in params.keys():
+            if key in rotationmap.priors.keys():
+                lnp += rotationmap.priors[key](params[key])
+        return lnp
 
     def _calc_ivar(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
                    z1=0.0, phi=1.0, tilt=0.0, r_min=0.0, r_max=1e5):
@@ -309,7 +331,9 @@ class rotationmap:
             self.error = self.error * np.ones(self.data.shape)
         rvals = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0,
                                  psi=psi, z1=z1, phi=phi, tilt=tilt)[0]
+        # rflat = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA)[0]
         mask = np.logical_and(rvals >= r_min, rvals <= r_max)
+        # mask = np.logical_and(mask, rflat <= 1.2r_max)
         mask = np.logical_and(mask, self.error > 0.0)
         return np.where(mask, np.power(self.error, -2.0), 0.0)
 
@@ -409,7 +433,7 @@ class rotationmap:
 
         def func(r):
             z = z0 * np.power(r, psi) + z1 * np.power(r, phi)
-            return z
+            return np.where(z >= 0.0, z, 0.0)
 
         # Calculate the pixel values.
 
@@ -658,6 +682,17 @@ class rotationmap:
 
     # -- Plotting functions. -- #
 
+    @staticmethod
+    def colormap():
+        """Nicer red and blue colormap."""
+        import matplotlib.pyplot as plt
+        import matplotlib.colors as mcolors
+        c2 = plt.cm.Reds(np.linspace(0, 1, 32))
+        c1 = plt.cm.Blues_r(np.linspace(0, 1, 32))
+        c1 = np.vstack([c1, [1, 1, 1, 1]])
+        colors = np.vstack((c1, c2))
+        return mcolors.LinearSegmentedColormap.from_list('eddymap', colors)
+
     def plot_data(self, levels=None, ivar=None):
         """Plot the first moment map."""
         import matplotlib.cm as cm
@@ -668,9 +703,9 @@ class rotationmap:
             levels = max(abs(levels[0]), abs(levels[1]))
             levels = self.vlsr + np.linspace(-levels, levels, 30)
         im = ax.contourf(self.xaxis, self.yaxis, self.data, levels,
-                         cmap=cm.RdBu_r, extend='both')
-        cb = plt.colorbar(im, pad=0.02)
-        cb.set_label(r'${\rm  v_{obs} \quad (km\,s^{-1})}$',
+                         cmap=rotationmap.colormap(), extend='both')
+        cb = plt.colorbar(im, pad=0.03, format='%.2f')
+        cb.set_label(r'${\rm v_{0} \quad (km\,s^{-1})}$',
                      rotation=270, labelpad=15)
         if ivar is not None:
             ax.contour(self.xaxis, self.yaxis, ivar, [0], colors='k')
@@ -686,11 +721,11 @@ class rotationmap:
         levels = np.nanpercentile(levels, [2, 98])
         levels = np.linspace(levels[0], levels[1], 30)
         im = ax.contourf(self.xaxis, self.yaxis, vkep, levels,
-                         cmap=cm.RdBu_r, extend='both')
+                         cmap=rotationmap.colormap(), extend='both')
         if ivar is not None:
             ax.contour(self.xaxis, self.yaxis, ivar, [0], colors='k')
-        cb = plt.colorbar(im, pad=0.02)
-        cb.set_label(r'${\rm  v_{Kep} \quad (km\,s^{-1})}$',
+        cb = plt.colorbar(im, pad=0.02, format='%.2f')
+        cb.set_label(r'${\rm v_{mod} \quad (km\,s^{-1})}$',
                      rotation=270, labelpad=15)
         self._gentrify_plot(ax)
 
@@ -699,7 +734,7 @@ class rotationmap:
         import matplotlib.cm as cm
         import matplotlib.pyplot as plt
         ax = plt.subplots()[1]
-        vres = self.data - self._make_model(params) * 1e-3
+        vres = self.data * 1e3 - self._make_model(params)
         levels = np.where(self.ivar != 0.0, vres, np.nan)
         levels = np.nanpercentile(levels, [10, 90])
         levels = np.linspace(levels[0], levels[1], 30)
@@ -707,27 +742,104 @@ class rotationmap:
                          cmap=cm.RdBu_r, extend='both')
         if ivar is not None:
             ax.contour(self.xaxis, self.yaxis, ivar, [0], colors='k')
-        cb = plt.colorbar(im, pad=0.02)
-        cb.set_label(r'${\rm  v_{Obs} - v_{Kep} \quad (km\,s^{-1})}$',
+        cb = plt.colorbar(im, pad=0.02, format='%d')
+        cb.set_label(r'${\rm  v_{0} - v_{mod} \quad (m\,s^{-1})}$',
                      rotation=270, labelpad=15)
         self._gentrify_plot(ax)
 
     def plot_surface(self, ax=None, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0,
                      psi=0.0, z1=0.0, phi=1.0, tilt=0.0, r_min=0.0,
-                     r_max=None, **kwargs):
-        """Overplot the emission surface."""
+                     r_max=None, ntheta=9, nrad=10, check_mask=True, **kwargs):
+        """
+        Overplot the emission surface onto the provided axis.
+
+        Args:
+            ax (Optional[AxesSubplot]): Axis to plot onto.
+            x0 (Optional[float]): Source right ascension offset [arcsec].
+            y0 (Optional[float]): Source declination offset [arcsec].
+            inc (Optional[float]): Source inclination [deg].
+            PA (Optional[float]): Source position angle [deg]. Measured
+                between north and the red-shifted semi-major axis in an
+                easterly direction.
+            z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
+                To get the far side of the disk, make this number negative.
+            psi (Optional[float]): Flaring angle for the emission surface.
+            z1 (Optional[float]): Aspect ratio correction term at 1" for the
+                emission surface. Should be opposite sign to z0.
+            phi (Optional[float]): Flaring angle correction term for the
+                emission surface.
+            tilt (Optional[float]): Value between -1 and 1, describing the
+                rotation of the disk. For negative values, the disk is rotating
+                clockwise on the sky.
+            r_min (Optional[float]): Inner radius to plot, default is 0.
+            r_max (Optional[float]): Outer radius to plot.
+            ntheta (Optional[int]): Number of theta contours to plot.
+            nrad (Optional[int]): Number of radial contours to plot.
+            check_mask (Optional[bool]): Mask regions which are like projection
+                errors for highly flared surfaces.
+
+        Returns:
+            ax (AxesSubplot): Axis with the contours overplotted.
+        """
+
+        # Dummy axis to overplot.
         if ax is None:
             import matplotlib.pyplot as plt
             ax = plt.subplots()[1]
 
-        rfront, tfront, _ = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA,
-                                             z0=z0, psi=psi, z1=z1, phi=phi,
-                                             tilt=tilt)
-        rback, tback, _ = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA,
-                                           z0=-z0, psi=psi, z1=-z1, phi=phi,
-                                           tilt=tilt)
+        # Front half of the disk.
+        rf, tf, zf = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0,
+                                      psi=psi, z1=z1, phi=phi, tilt=tilt)
+        rf = np.where(zf >= 0.0, rf, np.nan)
+        tf = np.where(zf >= 0.0, tf, np.nan)
 
-        ax.contourf(self.xaxis, self.yaxis, )
+        # Rear half of the disk.
+        rb, tb, zb = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=-z0,
+                                      psi=psi, z1=-z1, phi=phi, tilt=tilt)
+        rb = np.where(zb <= 0.0, rb, np.nan)
+        tb = np.where(zb <= 0.0, tb, np.nan)
+
+        # Flat disk for masking.
+        rr, tt, _ = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA)
+
+        # Make sure the bounds are OK.
+        r_min = 0.0 if r_min is None else r_min
+        r_max = rr.max() if r_max is None else r_max
+
+        # Make sure the front side hides the rear.
+        mf = np.logical_and(rf >= r_min, rf <= r_max)
+        mb = np.logical_and(rb >= r_min, rb <= r_max)
+        tf = np.where(mf, tf, np.nan)
+        rb = np.where(~mf, rb, np.nan)
+        tb = np.where(np.logical_and(np.isfinite(rb), mb), tb, np.nan)
+
+        # For some geometries we want to make sure they're not doing funky
+        # things in the outer disk when psi is large.
+        if check_mask:
+            mm = rr <= check_mask * r_max
+            rf = np.where(mm, rf, np.nan)
+            rb = np.where(mm, rb, np.nan)
+            tf = np.where(mm, tf, np.nan)
+            tb = np.where(mm, tb, np.nan)
+
+        # Popluate the kwargs with defaults.
+        lw = kwargs.pop('lw', kwargs.pop('linewidth', 0.5))
+        zo = kwargs.pop('zorder', 10000)
+        c = kwargs.pop('colors', kwargs.pop('c', 'k'))
+
+        radii = np.linspace(0, r_max, int(nrad + 1))[1:]
+        theta = np.linspace(-np.pi, np.pi, int(ntheta + 1))[:-1]
+
+        # Do the plotting.
+        ax.contour(self.xaxis, self.yaxis, rf, levels=radii, colors=c,
+                   linewidths=lw, linestyles='-', zorder=zo, **kwargs)
+        ax.contour(self.xaxis, self.yaxis, tf, levels=theta, colors=c,
+                   linewidths=lw, linestyles='-', zorder=zo, **kwargs)
+        ax.contour(self.xaxis, self.yaxis, rb, levels=radii, colors=c,
+                   linewidths=lw, linestyles='--', zorder=zo, **kwargs)
+        ax.contour(self.xaxis, self.yaxis, tb, levels=theta, colors=c,
+                   linewidths=lw, linestyles='--', zorder=zo)
+        return ax
 
     @staticmethod
     def plot_walkers(samples, nburnin=None, labels=None):
