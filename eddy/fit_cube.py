@@ -165,6 +165,19 @@ class rotationmap:
             import emcee
         except ImportError:
             raise ImportError("Cannot find emcee.")
+        
+        # Load up billiard if pool isn't specified
+	if 'pool' not in params:
+            try:
+                import billiard
+                from billiard import pool
+                bpool = pool.Pool()
+            except ImportError:
+                bpool = None
+            params['pool'] = bpool
+	
+
+
 
         # Check the dictionary. May need some more work.
         params = self._verify_dictionary(params)
