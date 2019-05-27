@@ -36,7 +36,7 @@ class rotationmap:
     priors = {}
 
     def __init__(self, path, uncertainty=None, clip=None, downsample=None,
-                 unit='m/s'):
+                 dx0=0.0, dy0=0.0, unit='m/s'):
         """
         Read in the velocity maps and initialize the class. To make the fitting
         quicker, we can clip the cube to a smaller region, or downsample the
@@ -52,6 +52,10 @@ class rotationmap:
             downsample (Optional[int]): Downsample the image by this factor for
                 quicker fitting. For example, using downsample=4 on an image
                 which is 1000 x 1000 pixels will reduce it to 250 x 250 pixels.
+            dx0 (Optional[float]): Recenter the image to this right ascencion
+                offset [arcsec].
+            dy0 (Optional[float]): Recenter the image to this declination
+                offset [arcsec].
             unit (Optional[str]): Unit of the input data cube. By deafult
                 assumed to be [m/s].
         Returns:
@@ -76,13 +80,19 @@ class rotationmap:
         elif unit.lower() != 'km/s':
             raise ValueError("unit must me 'm/s' or 'km/s'.")
 
+        # Read the position axes.
+        # TODO: Check half-pixel offsets.
         self.xaxis = self._read_position_axis(a=1)
         self.yaxis = self._read_position_axis(a=2)
         self.dpix = abs(np.diff(self.xaxis)).mean()
 
+        # Recenter the image if provided.
+        if (dx0 != 0.0) or (dy0 != 0.0):
+            self.shift_center(dx0=dx0, dy0=dy0)
+
         # Clip and downsample the cube to speed things up.
         if clip is not None:
-            self._clip_cube(clip)
+            self.clip_cube(clip)
         if downsample is not None:
             self._downsample_cube(downsample)
             self.dpix = abs(np.diff(self.xaxis)).mean()
@@ -619,18 +629,140 @@ class rotationmap:
             vkep = rotationmap._convolve_image(vkep, self._beamkernel())
         return vkep
 
+    # -- Functions to help determine the emission height. -- #
+
+    def get_peak_pix(self, PA, inc=None, x0=None, y0=None, frame='sky',
+                     ycut=20.0):
+        """
+        Get the coordinates of the peak velocities. This allows you to quickly
+        see if the disk is flared or have an idea of the emssision surface.
+
+        Args:
+            PA (float): Position angle of the disk in [degrees]. This is
+            measured from North to the red-shifted major axis Eastwards.
+            inc (Optional[float]): Disk inclination in [degrees], needed to
+                deproject into true height values.
+            frame (Optional[str]): Frame for the returned coordinates. If
+                frame='sky', return x- and y-offset values. Otherwise use the
+                rotated disk coordiantes.
+            ycut (Optional[float]): Only use the `ycut` fraction of the minor
+                axis for fitting.
+
+        Returns [if frame='sky']:
+            x (ndarray): x-positions of the peak values [arcsec].
+            y (ndarray): y-positions of the peak values [arcsec].
+
+        [if frame='disk']:
+            r (ndarray): Radial offset in [arcsec].
+            z (ndarray): Height in [arcsec].
+        """
+
+        if frame not in ['sky', 'disk']:
+            raise ValueError("'frame' must be 'sky' or 'disk'.")
+        if frame == 'disk' and inc is None:
+            raise ValueError("Must provide disk inclination to deproject.")
+
+        mask = np.percentile(self.yaxis, [50 + ycut / 2.0])
+        mask = abs(self.yaxis)[:, None] > mask
+
+        if x0 is not None or y0 is not None:
+            data = self.shift_center(dx0=x0, dy0=y0, save=False)
+        else:
+            data = self.data.copy()
+        x0 = 0.0 if x0 is None else x0
+        y0 = 0.0 if y0 is None else y0
+
+        data = self.rotate_image(PA, data=data, save=False)
+        data = np.where(mask, np.nan, data)
+
+        x = self.xaxis.copy()
+        ymax = np.take(self.yaxis, np.nanargmax(data, axis=0))
+        ymin = np.take(self.yaxis, np.nanargmin(data, axis=0))
+        y = np.where(x >= 0, ymax, ymin)
+
+        if frame == 'sky':
+            # TODO: Fix this mess. Might be an issue with tilt?
+            if PA <= 180.0:
+                x, y = rotationmap._rotate_coords(x, y, 90. - PA)
+            else:
+                x, y = rotationmap._rotate_coords(y, x, PA - 90.)
+            return x + x0, y + y0
+        idxs = np.argsort(abs(x))
+        return abs(x)[idxs], y[idxs] / np.sin(np.radians(inc))
+
+    def fit_surface(self, inc, PA, x0=None, y0=None, r_min=None, r_max=None,
+                    fit_z1=False, y_cut=20.0, **kwargs):
+        """
+        Fit the emission surface with the parametric model based on the pixels
+        of peak velocity.
+
+        Args:
+            inc (float): Disk inclination in [degrees].
+            PA (float): Disk position angle in [degrees].
+            x0 (Optional[float]): Disk center x-offset in [arcsec].
+            y0 (Optional[float]): Disk center y-offset in [arcsec].
+            r_min (Optional[float]): Minimum radius to fit in [arcsec].
+            r_max (Optional[float]): Maximum radius to fit in [arcsec].
+            fit_z1 (Optional[bool]): Include (z1, phi) in the fit.
+            y_cut (Optional[float]): Only use the `ycut` fraction of the minor
+                axis for fitting.
+            kwargs (Optional[dict]): Additional kwargs for curve_fit.
+
+        Returns:
+            popt (list): Best-fit parameters of (z0, psi[, z1, phi]).
+        """
+
+        from scipy.optimize import curve_fit
+        def z_func(x, z0, psi, z1=0.0, phi=1.0):
+            return z0 * x**psi + z1 * x**phi
+
+        # Get the coordinates to fit.
+        r, z = self._get_peak_pix(PA=PA, inc=inc, x0=x0, y0=y0,
+                                  frame='disk', ycut=ycut)
+
+        # Mask the coordinates.
+        r_min = r_min if r_min is not None else r[0]
+        r_max = r_max if r_max is not None else r[-1]
+        m1 = np.logical_and(np.isfinite(r), np.isfinite(z))
+        m2 = (r >= r_min) & (r <= r_max)
+        mask = m1 & m2
+        r, z = r[mask], z[mask]
+
+        # Initial guesses for the free params.
+        p0 = [z[abs(r - 1.0).argmin()], 1.0]
+        if fit_z1:
+            p0 += [-0.05, 3.0]
+        maxfev = kwargs.pop('maxfev', 100000)
+
+        # First fit the inner half to get a better p0 value.
+        mask = r <= 0.5 * r.max()
+        p_in = curve_fit(z_func, r[mask], z[mask], p0=p0, maxfev=maxfev,
+                         **kwargs)[0]
+
+        # Remove the pixels which are 'negative' depending on the tilt.
+        mask = y > 0.0 if np.sign(p_in[0]) else y < 0.0
+        popt = curve_fit(z_func, r[mask], z[mask], p0=p_in, maxfev=maxfev,
+                         **kwargs)[0]
+        return popt
+
     # -- Helper functions for loading up the data. -- #
 
-    def _clip_cube(self, radius):
-        """Clip the cube to  clip arcseconds from the origin."""
+    def clip_cube(self, radius):
+        """Clip the cube to +/- radius arcseconds from the origin."""
         xa = abs(self.xaxis - radius).argmin()
+        xa = xa - 1 if self.xaxis[xa] < radius else xa
         xb = abs(self.xaxis + radius).argmin()
-        ya = abs(self.yaxis - radius).argmin()
-        yb = abs(self.yaxis + radius).argmin()
-        self.data = self.data[yb:ya, xa:xb]
-        self.error = self.error[yb:ya, xa:xb]
+        xb = xb + 1 if self.xaxis[xb + 1] < radius else xb
+        xb += 1
+        ya = abs(self.yaxis + radius).argmin()
+        ya = ya - 1 if self.yaxis[ya] < radius else ya
+        yb = abs(self.yaxis - radius).argmin()
+        yb = yb + 1 if self.yaxis[yb + 1] < radius else yb
+        yb += 2
         self.xaxis = self.xaxis[xa:xb]
-        self.yaxis = self.yaxis[yb:ya]
+        self.yaxis = self.yaxis[ya:yb]
+        self.data = self.data[ya:yb, xa:xb]
+        self.error = self.error[ya:yb, xa:xb]
 
     def _downsample_cube(self, N):
         """Downsample the cube to make faster calculations."""
@@ -648,6 +780,26 @@ class rotationmap:
         a_del = self.header['cdelt%d' % a]
         a_pix = self.header['crpix%d' % a]
         return 3600 * ((np.arange(a_len) - a_pix + 1.5) * a_del)
+
+    def shift_center(self, dx0=0.0, dy0=0.0, data=None, save=True):
+        """Shift the source center by (dx0 [arcsec], dy0 [arcsec])."""
+        from scipy.ndimage import shift
+        data = self.data.copy() if data is None else data
+        to_shift = np.where(np.isfinite(data), data, 0.0)
+        data = shift(to_shift, [-dy0 / self.dpix, dx0 / self.dpix])
+        if save:
+            self.data = data
+        return data
+
+    def rotate_image(self, PA, data=None, save=True):
+        """Rotat the image PA [degrees] anticlockwise about the center."""
+        from scipy.ndimage import rotate
+        data = self.data.copy() if data is None else data
+        to_rotate = np.where(np.isfinite(data), data, 0.0)
+        data = rotate(to_rotate, PA - 90.0, reshape=False)
+        if save:
+            self.data = data
+        return data
 
     # -- Convolution functions. -- #
 
@@ -706,7 +858,12 @@ class rotationmap:
         colors = np.vstack((c1, c2))
         return mcolors.LinearSegmentedColormap.from_list('eddymap', colors)
 
-    def plot_data(self, levels=None, ivar=None):
+    @property
+    def extent(self):
+        """Extent for imshow."""
+        return [self.xaxis[0], self.xaxis[-1], self.yaxis[0], self.yaxis[-1]]
+
+    def plot_data(self, levels=None, ivar=None, return_ax=False):
         """Plot the first moment map."""
         import matplotlib.cm as cm
         import matplotlib.pyplot as plt
@@ -716,15 +873,17 @@ class rotationmap:
             levels = max(abs(levels[0]), abs(levels[1]))
             levels = self.vlsr + np.linspace(-levels, levels, 30)
         im = ax.contourf(self.xaxis, self.yaxis, self.data, levels,
-                         cmap=rotationmap.colormap(), extend='both')
+                         cmap=rotationmap.colormap(), extend='both', zorder=-9)
         cb = plt.colorbar(im, pad=0.03, format='%.2f')
         cb.set_label(r'${\rm v_{0} \quad (km\,s^{-1})}$',
                      rotation=270, labelpad=15)
         if ivar is not None:
             ax.contour(self.xaxis, self.yaxis, ivar, [0], colors='k')
         self._gentrify_plot(ax)
+        if return_ax:
+            return ax
 
-    def plot_bestfit(self, params, ivar=None, residual=False):
+    def plot_bestfit(self, params, ivar=None, residual=False, return_ax=False):
         """Plot the best-fit model."""
         import matplotlib.cm as cm
         import matplotlib.pyplot as plt
@@ -741,8 +900,10 @@ class rotationmap:
         cb.set_label(r'${\rm v_{mod} \quad (km\,s^{-1})}$',
                      rotation=270, labelpad=15)
         self._gentrify_plot(ax)
+        if return_ax:
+            return ax
 
-    def plot_residual(self, params, ivar=None):
+    def plot_residual(self, params, ivar=None, return_ax=False):
         """Plot the residual from the provided model."""
         import matplotlib.cm as cm
         import matplotlib.pyplot as plt
@@ -759,6 +920,8 @@ class rotationmap:
         cb.set_label(r'${\rm  v_{0} - v_{mod} \quad (m\,s^{-1})}$',
                      rotation=270, labelpad=15)
         self._gentrify_plot(ax)
+        if return_ax:
+            return ax
 
     def plot_surface(self, ax=None, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0,
                      psi=0.0, z1=0.0, phi=1.0, tilt=0.0, r_min=0.0,
@@ -854,6 +1017,69 @@ class rotationmap:
                    linewidths=lw, linestyles='--', zorder=zo)
         return ax
 
+    def plot_axes(self, ax, x0=0., y0=0., inc=0., PA=0., major=1.0, **kwargs):
+        """
+        Plot the major and minor axes on the provided axis.
+
+        Args:
+            ax (Matplotlib axes): Axes instance to plot onto.
+            x0 (optional[float]): Relative x-location of the center [arcsec].
+            y0 (optional[float]): Relative y-location of the center [arcsec].
+            inc (optional[float]): Inclination of the disk in [degrees].
+            PA (optional[float]): Position angle of the disk in [degrees].
+            major (optional[float]): Size of the major axis line in [arcsec].
+        """
+
+        # Default parameters plotting values.
+        ls = kwargs.pop('ls', kwargs.pop('linestyle', '--'))
+        lw = kwargs.pop('lw', kwargs.pop('linewidth', 0.5))
+        lc = kwargs.pop('c', kwargs.pop('color', 'k'))
+        zo = kwargs.pop('zorder', -2)
+
+        # Plotting.
+        PA = np.radians(PA)
+        ax.plot([major * np.cos(PA) - x0, major * np.cos(PA + np.pi) - x0],
+                [major * np.sin(PA) - y0, major * np.sin(PA + np.pi) - y0],
+                ls=ls, lw=lw, color=lc, zorder=zo)
+        minor = major * np.cos(np.radians(inc))
+        ax.plot([minor * np.cos(PA + 0.5 * np.pi) - x0,
+                 minor * np.cos(PA + 1.5 * np.pi) - x0],
+                [minor * np.sin(PA + 0.5 * np.pi) - y0,
+                 minor * np.sin(PA + 1.5 * np.pi) - y0],
+                ls=ls, lw=lw, color=lc, zorder=zo)
+
+    def plot_maxima(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, r_max=None,
+                    plot_axes_kwargs={}, scatter_kwargs={}, return_ax=False):
+        """
+        Mark the position of the maximum velocity as a function of radius. This
+        can help demonstrate if there is an appreciable bend in velocity
+        contours indicative of a flared emission surface.
+        """
+
+        # Background figure.
+        ax = self.plot_data(return_ax=True)
+        self.plot_axes(ax=ax, x0=x0, y0=y0, inc=inc, PA=PA,
+                       major=r_max if r_max is not None else 1.0,
+                       **plot_axes_kwargs)
+
+        # Get the pixels.
+        x, y = self.get_peak_pix(PA=PA, inc=inc, x0=x0, y0=y0, frame='sky')
+        r = np.hypot(x, y)
+        mask = r <= r_max
+        x, y, r = x[mask], y[mask], r[mask]
+
+        # Scatter plot of the pixels.
+        cm = scatter_kwargs.pop('cmap', 'bone_r')
+        ms = scatter_kwargs.pop('s', scatter_kwargs.pop('size', 5))
+        ec = scatter_kwargs.pop('ec', scatter_kwargs.pop('edgecolor', 'k'))
+        lw = scatter_kwargs.pop('lw', scatter_kwargs.pop('linewidth', 1.25))
+        ax.scatter(x, y, c=np.hypot(x, y), s=ms, lw=lw, cmap=cm, edgecolor=ec,
+                   vmin=0.0, vmax=r.max(), **scatter_kwargs)
+        ax.scatter(x, y, c=np.hypot(x, y), s=ms, lw=0., cmap=cm, edgecolor=ec,
+                   vmin=0.0, vmax=r.max(), **scatter_kwargs)
+        if return_ax:
+            return ax
+
     @staticmethod
     def plot_walkers(samples, nburnin=None, labels=None):
         """Plot the walkers to check if they are burning in."""
@@ -901,7 +1127,7 @@ class rotationmap:
         """Gentrify the plot."""
         from matplotlib.ticker import MultipleLocator
         ax.set_aspect(1)
-        ax.grid(ls=':', color='k', alpha=0.3)
+        ax.grid(ls=':', color='k', alpha=0.1, lw=0.5)
         ax.tick_params(which='both', right=True, top=True)
         ax.set_xlim(self.xaxis.max(), self.xaxis.min())
         ax.set_ylim(self.yaxis.min(), self.yaxis.max())
