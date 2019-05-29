@@ -1,5 +1,7 @@
+import emcee
 import numpy as np
 import scipy.constants as sc
+from scipy.interpolate import CubicSpline
 
 class profile(object):
 
@@ -7,15 +9,7 @@ class profile(object):
 
     mu = 2.37
     msun = 1.98847e30
-
-    # priors
-
-    mstar_min = 0.0
-    mstar_max = 10.0
-    gamma_min = -10.0
-    gamma_max = 10.0
-    mdisk_min = 0.0
-    mdisk_max = 0.1
+    priors = {}
 
     def __init__(self, rvals, v_phi, zvals=None, T_gas=None, dvphi=None,
                  maskNaN=True):
@@ -52,18 +46,19 @@ class profile(object):
         assert self.rvals.size == self.T_gas.size, "Wrong number of T_gas."
 
         # Calculate some other default values to speed the fitting.
+        self.set_default_priors()
         self.cs = self._calculate_soundspeed()
         self.rvals_m = self.rvals * sc.au
         self.zvals_m = self.zvals * sc.au
         self._fit_gamma = False
         self._fit_mstar = False
         self._fit_perts = False
+        self._smoothprs = False
 
     # -- Main Fitting Function -- #
 
-    def fit_vphi(self, p0, fit_gamma=False, fit_mdisk=False,
-                 nwalkers=64, nburnin=1000, nsteps=1000,
-                 percentiles=[16, 50, 84], niter=None,
+    def fit_vphi(self, p0, fit_gamma=False, fit_mdisk=False, smooth=False,
+                 nwalkers=64, nburnin=1000, nsteps=1000, niter=None,
                  minimize_kwargs=None, emcee_kwargs=None):
         """
         Find the best-fit density profile to explain the rotation profile.
@@ -92,25 +87,23 @@ class profile(object):
                 included in the fit. If not, no self-gravity correction will be
                 included.
             nwalkers (Optional[int]): Number of walkers to use for the MCMC.
-            nburnin (Optional[int]):
+            nburnin (Optional[int]): Number of burn-in steps to use.
+            nsteps (Optional[int]): Number of steps to use to sapmle the PDF.
+            niter (Optional[int]): Number of MCMC iterations to perform.
+            minimize_kwargs (Optional[dict]): Kwargs to pass to the
+                optimization routine.
+            emcee_kwargs (Optional[dict]): Kwargs to pass to the emcee sampler.
 
         Returns:
             samples: Samples of the posterior distributions.
         """
-
-        # Import necessary packages.
-        try:
-            import emcee
-            if int(emcee.__version__[0]) < 3:
-                raise ImportError("Install v3.0 or higher of emcee.")
-        except:
-            raise ImportError("Install emcee (v3.0 or higher).")
 
         # Number of walkers.
         p0 = np.atleast_1d(p0)
         nwalkers = int(max(2*p0.size, nwalkers))
 
         # Set the global variables for the fitting.
+        self._smoothprs = bool(smooth)
         self._fit_gamma = int(fit_gamma)
         self._fit_mdisk = int(fit_mdisk)
         self._fit_perts = (len(p0) - int(fit_gamma) - int(fit_mdisk))
@@ -140,6 +133,8 @@ class profile(object):
         self.plot_v_phi(v_mod=v_mod, return_fig=True)
 
         # Reset the fitting values before returning samples.
+        self.set_default_priors()
+        self._smoothprs = False
         self._fit_gamma = False
         self._fit_mdisk = False
         self._fit_perts = False
@@ -159,7 +154,7 @@ class profile(object):
 
     def _fit_density_ln_prob(self, theta):
         """Log-probability function for density profile fits."""
-        lnp = self._fit_density_ln_prior(theta)
+        lnp = self._ln_prior(theta)
         if np.isfinite(lnp):
             return lnp + self._fit_density_ln_like(theta)
         return -np.inf
@@ -170,36 +165,6 @@ class profile(object):
         lnx2 = np.power((self.v_phi - v_mod), 2)
         lnx2 = -0.5 * np.sum(lnx2 * self.dvphi**-2)
         return lnx2 if np.isfinite(lnx2) else -np.inf
-
-    def _fit_density_ln_prior(self, theta):
-        """Log-prior functions for density profile fits."""
-        mstar, gamma, mdisk, perts = self._unpack_theta(theta)
-
-        # Stellar mass.
-        if not profile.mstar_min < mstar < profile.mstar_max:
-            return -np.inf
-
-        # Surface density profile.
-        if self._fit_gamma:
-            if not profile.gamma_min < gamma < profile.gamma_max:
-                return -np.inf
-
-        # Disk mass.
-        if self._fit_mdisk:
-            if not profile.mdisk_min < mdisk / mstar < profile.mdisk_max:
-                return -np.inf
-
-        # Priors on the perturbations.
-        for n in range(self._fit_perts):
-            p0, dp, P = perts[(n)*3:(n+1)*3]
-            if not -1.5 * self.rvals[0] < p0 < 1.5 * self.rvals[-1]:
-                return -np.inf
-            if not 0.0 < dp < self.rvals[-1]:
-                return -np.inf
-            if not 0.0 < P < 1.0:
-                return- -np.inf
-
-        return 0.0
 
     def _unpack_theta(self, theta):
         """Unpack theta."""
@@ -222,6 +187,46 @@ class profile(object):
         dp0 = np.random.randn(nwalkers * len(p0)).reshape(nwalkers, len(p0))
         dp0 = np.where(p0 == 0.0, 1.0, p0)[None, :] * (1.0 + scatter * dp0)
         return np.where(p0[None, :] == 0.0, dp0 - 1.0, dp0)
+
+    # -- Prior Functions -- #
+
+    def set_default_priors(self):
+        """Set the default priors."""
+        self.set_prior('mstar', [0., 10.], 'flat')
+        self.set_prior('gamma', [-10., 10.], 'flat')
+        self.set_prior('mdisk', [0., 0.1], 'flat')
+        self.set_prior('r', [0.0, 500.], 'flat')
+        self.set_prior('dr', [0.0, 500.], 'flat')
+        self.set_prior('dn', [0.0, 1.0], 'flat')
+
+    def set_prior(self, param, args, type='flat'):
+        """Set the prior for the given parameter."""
+        type = type.lower()
+        if type not in ['flat', 'gaussian']:
+            raise ValueError("type must be 'flat' or 'gaussian'.")
+        if type == 'flat':
+            def prior(p):
+                if not args[0] <= p <= args[1]:
+                    return -np.inf
+                return np.log(1.0 / (args[1] - args[0]))
+        else:
+            def prior(p):
+                lnp = np.exp(-0.5 * ((args[0] - p) / args[1])**2)
+                return np.log(lnp / np.sqrt(2. * np.pi) / args[1])
+        profile.priors[param] = prior
+
+    def _ln_prior(self, theta):
+        """Log-prior functions for density profile fits."""
+        mstar, gamma, mdisk, perts = self._unpack_theta(theta)
+        lnp = profile.priors['mstar'](mstar)
+        lnp += 0.0 if gamma is None else profile.priors['gamma'](gamma)
+        lnp += 0.0 if mdisk is None else profile.priors['mdisk'](mdisk)
+        for n in range(self._fit_perts):
+            r, dr, dn = perts[n*3:(n+1)*3]
+            lnp += profile.priors['r'](r)
+            lnp += profile.priors['dr'](dr)
+            lnp += profile.priors['dn'](dn)
+        return lnp
 
     # -- Velocity Functions -- #
 
@@ -258,6 +263,8 @@ class profile(object):
     def _dPdR(self, n_mol):
         """Pressure gradient for a given n_mol in [/cm^3]."""
         P = n_mol * sc.k * self.T_gas * 1e6
+        if self._smoothprs:
+            return CubicSpline(self.rvals_m, P)(self.rvals_m, 1)
         return np.gradient(P, self.rvals_m)
 
     # -- Density Functions -- #
@@ -410,7 +417,8 @@ class profile(object):
         if return_fig:
             return fig
 
-    def plot_walkers(self, samples, nburnin=None, labels=None, return_fig=False,
+    @staticmethod
+    def plot_walkers(samples, nburnin=None, labels=None, return_fig=False,
                      plot_kwargs=None, histogram=True):
         """
         Plot the walkers to check if they are burning in.
