@@ -1,3 +1,14 @@
+"""
+Class to read in radial profiles of the rotational velocity, height of the
+emission and gas temperature in order to recover the underlying stellar mass,
+normalized gas pressure profile and the disk dynamical mass.
+
+The main functions of interest are:
+
+    fit_vphi: Will try and fit a stellar mass, a gas volume density profile and
+        the disk dynamical mass (at least over the provided radial range).
+"""
+
 import emcee
 import numpy as np
 import scipy.constants as sc
@@ -193,11 +204,11 @@ class profile(object):
     def set_default_priors(self):
         """Set the default priors."""
         self.set_prior('mstar', [0., 10.], 'flat')
-        self.set_prior('gamma', [-10., 10.], 'flat')
+        self.set_prior('gamma', [-100., 0.], 'flat')
         self.set_prior('mdisk', [0., 0.1], 'flat')
         self.set_prior('r', [0.0, 500.], 'flat')
-        self.set_prior('dr', [0.0, 500.], 'flat')
-        self.set_prior('dn', [0.0, 1.0], 'flat')
+        self.set_prior('dr', [np.diff(self.rvals).mean(), 500.], 'flat')
+        self.set_prior('dn', [1.0, 1.0], 'flat')
 
     def set_prior(self, param, args, type='flat'):
         """Set the prior for the given parameter."""
@@ -439,7 +450,7 @@ class profile(object):
 
         # Imports.
         import matplotlib.pyplot as plt
-        from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
+
 
         # Check the length of the label list.
         if labels is not None:

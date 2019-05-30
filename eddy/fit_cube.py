@@ -21,6 +21,8 @@ The main functions of interest are:
 
 """
 
+import time
+import emcee
 import numpy as np
 from astropy.io import fits
 import scipy.constants as sc
@@ -28,11 +30,11 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-
 class rotationmap:
 
     msun = 1.988e30
     fwhm = 2. * np.sqrt(2 * np.log(2))
+    niter = 5
     priors = {}
 
     def __init__(self, path, uncertainty=None, clip=None, downsample=None,
@@ -52,6 +54,8 @@ class rotationmap:
             downsample (Optional[int]): Downsample the image by this factor for
                 quicker fitting. For example, using downsample=4 on an image
                 which is 1000 x 1000 pixels will reduce it to 250 x 250 pixels.
+                If you use downsample='beam' it will sample roughly spatially
+                independent pixels using the beam major axis as the distance.
             dx0 (Optional[float]): Recenter the image to this right ascencion
                 offset [arcsec].
             dy0 (Optional[float]): Recenter the image to this declination
@@ -90,19 +94,21 @@ class rotationmap:
         if (dx0 != 0.0) or (dy0 != 0.0):
             self.shift_center(dx0=dx0, dy0=dy0)
 
+        # Beam parameters.
+        self._readbeam()
+
         # Clip and downsample the cube to speed things up.
         if clip is not None:
             self.clip_cube(clip)
         if downsample is not None:
+            if downsample == 'beam':
+                downsample = int(self.bmaj / self.dpix)
             self._downsample_cube(downsample)
             self.dpix = abs(np.diff(self.xaxis)).mean()
         self.mask = np.isfinite(self.data)
 
         # Estimate the systemic velocity.
         self.vlsr = np.nanmedian(self.data)
-
-        # Beam parameters.
-        self._readbeam()
 
         # Set priors.
         self.set_default_priors()
@@ -111,9 +117,8 @@ class rotationmap:
 
     def fit_keplerian(self, p0, params, r_min=None, r_max=None, optimize=True,
                       nwalkers=None, nburnin=300, nsteps=100, scatter=1e-3,
-                      plot_walkers=True, plot_corner=True, plot_bestfit=True,
-                      plot_residual=True, return_samples=False,
-                      return_dict=True):
+                      plots=None, returns=None, pool=None, emcee_kwargs=None,
+                      niter=1):
         """
         Fit a Keplerian rotation profile to the data.
 
@@ -130,11 +135,10 @@ class rotationmap:
 
                 making sure the value is an integer. The values needed are:
                 'x0', 'y0', 'inc', 'PA', 'mstar', 'vlsr', 'dist'. If a flared
-                emission surface is wanted then you can add 'z0', 'psi' and
-                'tilt' with their descriptions found in disk_coords(). To
-                include a convolution with the beam stored in the header use
-                params['beam'] = True, where this must be a boolean, not an
-                integer.
+                emission surface is wanted then you can add 'z0', 'psi' with
+                their descriptions found in disk_coords(). To include a
+                convolution with the beam stored in the header use
+                params['beam'] = True, where this must be a boolean.
             r_min (Optional[float]): Inner radius to fit in (arcsec).
             r_max (Optional[float]): Outer radius to fit in (arcsec).
             optimize (Optional[bool]): Use scipy.optimize to find the p0 values
@@ -143,51 +147,31 @@ class rotationmap:
                 values are used for the deprojection, or those found from the
                 optimization. If this results in a poor initial mask, try with
                 optimise=False.
+            niter (Optional[int]): Number of iterations to perform using the
+                median PDF values from the previous MCMC run as starting
+                positions.
             nwalkers (Optional[int]): Number of walkers to use for the MCMC.
             scatter (Optional[float]): Scatter used in distributing walker
                 starting positions around the initial p0 values.
-            plot_walkers (Optional[bool]): Plot the samples taken by the
-                walkers.
-            plot_corner (Optional[bool]): Plot the covariances of the
-                posteriors.
-            plot_bestfit (Optional[bool]): Plot the best fit model.
-            plot_residual (Optional[bool]): Plot the residual from the data and
-                the best fit model.
-            return_samples (Optional[bool]): If true, return all the samples of
-                the posterior distribution after the burn in period, otherwise
-                just return the 16th, 50th and 84th percentiles of each
-                posterior distribution.
-            return_dict (Optional[bool]): If true, return a dictionary of the
-                geometrical parameters which will be accepted in other
-                functions.
+            plots (Optional[list]): List of the diagnostic plots to make. This
+                can include 'mask', 'walkers', 'corner', 'bestfit' 'residual',
+                or 'none' if no plots are to be plotted. By default, all are
+                plotted.
+            returns (Optional[list]): List of items to return. Can contain
+                'samples', 'percentiles', 'dict' or 'none'. By default
+                'percentiles' are returned.
+            pool (Optional): An object with a `map` method.
+            emcee_kwargs (Optional[dict]): Dictionary to pass to the emcee
+                EnsembleSampler.
 
         Returns:
-            to_return (list): Always returns the 16th, 50th and 84th
-                percentiles of the posterior distributions. If return_sample is
-                True then it will return all the samples of the posterior
-                distribution after the burn in period. If return_dict is True
-                then will also provide a dictionary of geometrical parameters
-                accepted in other functions.
+            to_return (list): Depending on the returns list provided. 'samples'
+                will be all the samples of the posteriors (with the burn-in
+                periods removed). 'percentiles' will return the 16th, 50th and
+                84th percentiles of each posterior functions. 'dict' will
+                return a dictionary of the median parameters which can be
+                directly input to other functions.
         """
-
-        # Load up emcee.
-        try:
-            import emcee
-        except ImportError:
-            raise ImportError("Cannot find emcee.")
-        
-        # Load up billiard if pool isn't specified
-	if 'pool' not in params:
-            try:
-                import billiard
-                from billiard import pool
-                bpool = pool.Pool()
-            except ImportError:
-                bpool = None
-            params['pool'] = bpool
-	
-
-
 
         # Check the dictionary. May need some more work.
         params = self._verify_dictionary(params)
@@ -202,8 +186,7 @@ class rotationmap:
                                     inc=temp['inc'], PA=temp['PA'],
                                     z0=temp['z0'], psi=temp['psi'],
                                     z1=temp['z1'], phi=temp['phi'],
-                                    tilt=temp['tilt'], r_min=r_min,
-                                    r_max=r_max)
+                                    r_min=r_min, r_max=r_max)
 
         # Check what the parameters are.
         labels = rotationmap._get_labels(params)
@@ -220,68 +203,94 @@ class rotationmap:
                                         inc=temp['inc'], PA=temp['PA'],
                                         z0=temp['z0'], psi=temp['psi'],
                                         z1=temp['z1'], phi=temp['phi'],
-                                        tilt=temp['tilt'], r_min=r_min,
-                                        r_max=r_max)
+                                        r_min=r_min, r_max=r_max)
 
-        # Plot the data to show where the mask is.
-        self.plot_data(ivar=self.ivar)
-
-        # Make sure all starting positions are valid.
-        # COMING SOON.
-
-        # Set up and run the MCMC.
-        ndim = len(p0)
-        nwalkers = 4 * ndim if nwalkers is None else nwalkers
-        p0 = rotationmap._random_p0(p0, scatter, nwalkers)
-
-        sampler = emcee.EnsembleSampler(nwalkers, ndim, self._ln_probability,
-                                        args=[params, np.nan])
-        sampler.run_mcmc(p0, nburnin + nsteps)
-        samples = sampler.chain[:, -int(nsteps):]
-        samples = samples.reshape(-1, samples.shape[-1])
-
-        bestfit = np.median(samples, axis=0)
-        bestfit = rotationmap._populate_dictionary(bestfit, params)
-        bestfit = self._verify_dictionary(bestfit)
+        # Set up and run the MCMC with emcee.
+        time.sleep(0.5)
+        nwalkers = 2 * ndim if nwalkers is None else nwalkers
+        emcee_kwargs = {} if emcee_kwargs is None else emcee_kwargs
+        emcee_kwargs['scatter'], emcee_kwargs['pool'] = scatter, pool
+        for _ in range(int(niter)):
+            sampler = self._run_mcmc(p0=p0, params=params, nwalkers=nwalkers,
+                                     nburnin=nburnin, nsteps=nsteps,
+                                     **emcee_kwargs)
+            samples = sampler.chain[:, -int(nsteps):]
+            samples = samples.reshape(-1, samples.shape[-1])
+            p0 = np.median(samples, axis=0)
+        medians = rotationmap._populate_dictionary(p0, params)
+        medians = self._verify_dictionary(medians)
 
         # Diagnostic plots.
-        if plot_walkers:
+        if plots is None:
+            plots = ['mask', 'walkers', 'corner', 'bestfit', 'residual']
+        plots = np.atleast_1d(plots)
+        if 'none' in plots:
+            plots = []
+        if 'mask' in plots:
+            self.plot_data(ivar=self.ivar)
+        if 'walkers' in plots:
             rotationmap.plot_walkers(sampler.chain.T, nburnin, labels)
-        if plot_corner:
+        if 'corner' in plots:
             rotationmap.plot_corner(samples, labels)
-        if plot_bestfit:
-            self.plot_bestfit(bestfit, ivar=self.ivar)
-        if plot_residual:
-            self.plot_residual(bestfit, ivar=self.ivar)
+        if 'bestfit' in plots:
+            self.plot_bestfit(medians, ivar=self.ivar)
+        if 'residual' in plots:
+            self.plot_residual(medians, ivar=self.ivar)
 
         # Generate the output.
-        to_return = [np.percentile(samples, [16, 60, 84], axis=0)]
-        if return_samples:
+        if returns is None:
+            returns = ['percentiles']
+        returns = np.atleast_1d(returns)
+        if 'none' in returns:
+            return None
+        to_return = []
+        if 'samples' in returns:
             to_return += [samples]
-        if return_dict:
-            to_return += [bestfit]
+        if 'percentiles' in returns:
+            to_return += [np.percentile(samples, [16, 60, 84], axis=0)]
+        if 'dict' in returns:
+            to_return += [medians]
         return to_return
 
-    def _optimize_p0(self, theta, params):
+    def _optimize_p0(self, theta, params, **kwargs):
         """Optimize the initial starting positions."""
         from scipy.optimize import minimize
+
+        # TODO: implement bounds.
+        # TODO: cycle through parameters one at a time for a better fit.
 
         # Negative log-likelihood function.
         def nlnL(theta):
             return -self._ln_probability(theta, params)
 
-        # TODO: implement bounds.
+        method = kwargs.pop('method', 'TNC')
+        options = kwargs.pop('options', {})
+        options['method'] = options.pop('maxiter', 10000)
+        options['ftol'] = options.pop('ftol', 1e-3)
+        res = minimize(nlnL, x0=theta, method=method, options=options)
 
-        res = minimize(nlnL, x0=theta, method='TNC',
-                       options={'maxiter': 100000, 'ftol': 1e-3})
-        theta = res.x
         if res.success:
+            theta = res.x
             print("Optimized starting positions:")
         else:
             print("WARNING: scipy.optimize did not converge.")
             print("Starting positions:")
         print('\tp0 =', ['%.2e' % t for t in theta])
+        time.sleep(.3)
         return theta
+
+    # -- MCMC Functions -- #
+
+    def _run_mcmc(self, p0, params, nwalkers, nburnin, nsteps, **kwargs):
+        """Run the MCMC sampling. Returns the sampler."""
+        p0 = self._random_p0(p0, kwargs.pop('scatter', 1e-3), nwalkers)
+        progress = kwargs.pop('progress', True)
+        sampler = emcee.EnsembleSampler(nwalkers, p0.shape[1],
+                                        self._ln_probability,
+                                        args=[params, np.nan],
+                                        **kwargs)
+        sampler.run_mcmc(p0, nburnin + nsteps, progress=progress)
+        return sampler
 
     @staticmethod
     def _random_p0(p0, scatter, nwalkers):
@@ -331,11 +340,10 @@ class rotationmap:
         self.set_prior('mstar', [0.1, 5.], 'flat')
         self.set_prior('vlsr', [np.nanmin(self.data) * 1e3,
                                 np.nanmax(self.data) * 1e3], 'flat')
-        self.set_prior('z0', [0., 10.], 'flat')
+        self.set_prior('z0', [-5., 5.], 'flat')
         self.set_prior('psi', [0., 5.], 'flat')
-        self.set_prior('z1', [-10., 10.], 'flat')
+        self.set_prior('z1', [-5., 5.], 'flat')
         self.set_prior('phi', [0., 5.], 'flat')
-        self.set_prior('tilt', [-1., 1.], 'flat')
 
     def _ln_prior(self, params):
         """Log-priors."""
@@ -346,17 +354,15 @@ class rotationmap:
         return lnp
 
     def _calc_ivar(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
-                   z1=0.0, phi=1.0, tilt=0.0, r_min=0.0, r_max=1e5):
+                   z1=0.0, phi=1.0, r_min=0.0, r_max=1e5):
         """Calculate the inverse variance including radius mask."""
         try:
             assert self.error.shape == self.data.shape
         except AttributeError:
             self.error = self.error * np.ones(self.data.shape)
         rvals = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0,
-                                 psi=psi, z1=z1, phi=phi, tilt=tilt)[0]
-        # rflat = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA)[0]
+                                 psi=psi, z1=z1, phi=phi)[0]
         mask = np.logical_and(rvals >= r_min, rvals <= r_max)
-        # mask = np.logical_and(mask, rflat <= 1.2r_max)
         mask = np.logical_and(mask, self.error > 0.0)
         return np.where(mask, np.power(self.error, -2.0), 0.0)
 
@@ -397,8 +403,6 @@ class rotationmap:
             params['phi'] = 1.0
         if params.get('dist') is None:
             params['dist'] = 100.
-        if params.get('tilt') is None:
-            params['tilt'] = 0.0
         if params.get('vlsr') is None:
             params['vlsr'] = self.vlsr
         if params.get('beam') is None:
@@ -411,7 +415,7 @@ class rotationmap:
     # -- Deprojection functions. -- #
 
     def disk_coords(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
-                    z1=0.0, phi=0.0, tilt=0.0, frame='polar', **kwargs):
+                    z1=0.0, phi=0.0, frame='polar', **kwargs):
         """
         Get the disk coordinates given certain geometrical parameters and an
         emission surface. The emission surface is parameterized as a powerlaw
@@ -433,9 +437,6 @@ class rotationmap:
                 emission surface. Should be opposite sign to z0.
             phi (Optional[float]): Flaring angle correction term for the
                 emission surface.
-            tilt (Optional[float]): Value between -1 and 1, describing the
-                rotation of the disk. For negative values, the disk is rotating
-                clockwise on the sky.
             frame (Optional[str]): Frame of reference for the returned
                 coordinates. Either 'polar' or 'cartesian'.
 
@@ -456,81 +457,26 @@ class rotationmap:
 
         def func(r):
             z = z0 * np.power(r, psi) + z1 * np.power(r, phi)
-            return np.where(z >= 0.0, z, 0.0)
+            if z0 > 0.0:
+                return np.where(z > 0.0, z, 0.0)
+            else:
+                return np.where(z < 0.0, z, 0.0)
 
         # Calculate the pixel values.
 
         if frame == 'cartesian':
-            c1, c2 = self._get_flared_cart_coords(x0, y0, inc, PA, func, tilt)
+            c1, c2 = self._get_flared_cart_coords(x0, y0, inc, PA, func)
             c3 = func(np.hypot(c1, c2))
         else:
-            c1, c2 = self._get_flared_polar_coords(x0, y0, inc, PA, func, tilt)
+            c1, c2 = self._get_flared_polar_coords(x0, y0, inc, PA, func)
             c3 = func(c1)
         return c1, c2, c3
-
-    def deproject_image(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=1.0,
-                        z1=0.0, phi=0.0, tilt=0.0, image=None, **kwargs):
-        """
-        Deproject the image given the geometrical parameters. If no image is
-        given, will used the attached rotation map.
-
-        Args:
-            x0 (Optional[float]): Source right ascension offset (arcsec).
-            y0 (Optional[float]): Source declination offset (arcsec).
-            inc (Optional[float]): Source inclination (degrees).
-            PA (Optional[float]): Source position angle (degrees). Measured
-                between north and the red-shifted semi-major axis in an
-                easterly direction.
-            z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
-                To get the far side of the disk, make this number negative.
-            psi (Optional[float]): Flaring angle for the emission surface.
-            z1 (Optional[float]): Aspect ratio correction term at 1" for the
-                emission surface. Should be opposite sign to z0.
-            phi (Optional[float]): Flaring angle correction term for the
-                emission surface.
-            tilt (Optional[float]): Value between -1 and 1, positive values
-                result in the north side of the disk being closer to the
-                observer; negative values the south.
-            image (Optional[ndarray]): Image to deproject (must be the same
-                shape as the original velocity map). If non is specified then
-                it will default to the attached velocity map.
-        Returns:
-            vep (ndarray): Geometrically deprojected image on the attached x-
-                and y-axis.
-        """
-
-        from scipy.interpolate import griddata
-
-        # Deproject the pixels into cartesians coordinates.
-        xpix, ypix, _ = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0,
-                                         psi=psi, z1=z1, phi=phi, tilt=tilt,
-                                         frame='cartesian')
-        xpix, ypix = xpix.flatten(), ypix.flatten()
-        if image is not None:
-            dpix = image.flatten()
-        else:
-            dpix = self.data.flatten()
-        if xpix.shape != dpix.shape:
-            raise ValueError("Unknown shaped input image.")
-
-        # Deproject the mask.
-        isnan = griddata((xpix, ypix), np.where(self.mask, 1, 0).flatten(),
-                         (self.xaxis[None, :], self.yaxis[:, None]),
-                         method='nearest')
-
-        # Mask any NaN values and regrid the data.
-        mask = np.isfinite(dpix)
-        xpix, ypix, dpix = xpix[mask], ypix[mask], dpix[mask]
-        depr = griddata((xpix, ypix), dpix,
-                        (self.xaxis[None, :], self.yaxis[:, None]),
-                        method='linear')
-        return np.where(isnan, depr, np.nan)
 
     @staticmethod
     def _rotate_coords(x, y, PA):
         """Rotate (x, y) by PA [deg]."""
-        x_rot = x * np.cos(np.radians(PA)) - y * np.sin(np.radians(PA))
-        y_rot = y * np.cos(np.radians(PA)) + x * np.sin(np.radians(PA))
+        x_rot = y * np.cos(np.radians(PA)) + x * np.sin(np.radians(PA))
+        y_rot = x * np.cos(np.radians(PA)) - y * np.sin(np.radians(PA))
         return x_rot, y_rot
 
     @staticmethod
@@ -550,7 +496,7 @@ class rotationmap:
     def _get_midplane_cart_coords(self, x0, y0, inc, PA):
         """Return cartesian coordaintes of midplane in [arcsec, arcsec]."""
         x_sky, y_sky = self._get_cart_sky_coords(x0, y0)
-        x_rot, y_rot = rotationmap._rotate_coords(y_sky, x_sky, -PA)
+        x_rot, y_rot = rotationmap._rotate_coords(x_sky, y_sky, PA)
         return rotationmap._deproject_coords(x_rot, y_rot, inc)
 
     def _get_midplane_polar_coords(self, x0, y0, inc, PA):
@@ -558,28 +504,24 @@ class rotationmap:
         x_mid, y_mid = self._get_midplane_cart_coords(x0, y0, inc, PA)
         return np.hypot(y_mid, x_mid), np.arctan2(y_mid, x_mid)
 
-    def _get_flared_polar_coords(self, x0, y0, inc, PA, func, tilt):
+    def _get_flared_polar_coords(self, x0, y0, inc, PA, func):
         """Return polar coordinates of surface in [arcsec, radians]."""
         x_mid, y_mid = self._get_midplane_cart_coords(x0, y0, inc, PA)
-        r_mid, t_mid = self._get_midplane_polar_coords(x0, y0, inc, PA)
-        for _ in range(5):
-            y_tmp = func(r_mid) * np.sign(tilt) * np.tan(np.radians(inc))
-            y_tmp = y_mid - y_tmp
+        r_mid = np.hypot(y_mid, x_mid)
+        for _ in range(self.niter):
+            y_tmp = y_mid - func(r_mid) * np.tan(np.radians(inc))
             r_mid = np.hypot(y_tmp, x_mid)
-            t_mid = np.arctan2(y_tmp, x_mid)
-        return r_mid, t_mid
+        return r_mid, np.arctan2(y_tmp, x_mid)
 
-    def _get_flared_cart_coords(self, x0, y0, inc, PA, func, tilt):
+    def _get_flared_cart_coords(self, x0, y0, inc, PA, func):
         """Return cartesian coordinates of surface in [arcsec, arcsec]."""
-        r_mid, t_mid = self._get_flared_polar_coords(x0, y0, inc,
-                                                     PA, func, tilt)
+        r_mid, t_mid = self._get_flared_polar_coords(x0, y0, inc, PA, func)
         return r_mid * np.cos(t_mid), r_mid * np.sin(t_mid)
 
     # -- Functions to build Keplerian rotation profiles. -- #
 
     def keplerian(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
-                  z1=0.0, phi=1.0, tilt=0.0, mstar=1.0, dist=100., vlsr=0.0,
-                  **kwargs):
+                  z1=0.0, phi=1.0, mstar=1.0, dist=100., vlsr=0.0, **kwargs):
         """
         Return a Keplerian rotation profile (not including pressure) in [m/s].
         This includes the deivation due to non-zero heights above the midplane,
@@ -599,9 +541,6 @@ class rotationmap:
                 emission surface. Should be opposite sign to z0.
             phi (Optional[float]): Flaring angle correction term for the
                 emission surface.
-            tilt (Optional[float]): Value between -1 and 1, positive values
-                result in the north side of the disk being closer to the
-                observer; negative values the south.
             mstar (Optional[float]): Mass of the star in (solar masses).
             dist (Optional[float]): Distance to the source in (parsec).
             vlsr (Optional[floar]): Systemic velocity in (m/s).
@@ -610,7 +549,7 @@ class rotationmap:
             vproj (ndarray): Projected Keplerian rotation at each pixel (m/s).
         """
         coords = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0, psi=psi,
-                                  z1=z1, phi=phi, tilt=tilt, frame='polar')
+                                  z1=z1, phi=phi, frame='polar')
         rvals = coords[0] * sc.au * dist
         zvals = coords[2] * sc.au * dist
         vkep = sc.G * mstar * self.msun * np.power(rvals, 2.0)
@@ -624,7 +563,7 @@ class rotationmap:
                               vlsr=params['vlsr'], z0=params['z0'],
                               psi=params['psi'], z1=params['z1'],
                               phi=params['phi'], mstar=params['mstar'],
-                              dist=params['dist'], tilt=params['tilt'])
+                              dist=params['dist'])
         if params['beam']:
             vkep = rotationmap._convolve_image(vkep, self._beamkernel())
         return vkep
@@ -681,7 +620,7 @@ class rotationmap:
         y = np.where(x >= 0, ymax, ymin)
 
         if frame == 'sky':
-            # TODO: Fix this mess. Might be an issue with tilt?
+            # TODO: Fix this mess.
             if PA <= 180.0:
                 x, y = rotationmap._rotate_coords(x, y, 90. - PA)
             else:
@@ -691,7 +630,7 @@ class rotationmap:
         return abs(x)[idxs], y[idxs] / np.sin(np.radians(inc))
 
     def fit_surface(self, inc, PA, x0=None, y0=None, r_min=None, r_max=None,
-                    fit_z1=False, y_cut=20.0, **kwargs):
+                    fit_z1=False, ycut=20.0, **kwargs):
         """
         Fit the emission surface with the parametric model based on the pixels
         of peak velocity.
@@ -717,8 +656,8 @@ class rotationmap:
             return z0 * x**psi + z1 * x**phi
 
         # Get the coordinates to fit.
-        r, z = self._get_peak_pix(PA=PA, inc=inc, x0=x0, y0=y0,
-                                  frame='disk', ycut=ycut)
+        r, z = self.get_peak_pix(PA=PA, inc=inc, x0=x0, y0=y0,
+                                 frame='disk', ycut=ycut)
 
         # Mask the coordinates.
         r_min = r_min if r_min is not None else r[0]
@@ -739,8 +678,8 @@ class rotationmap:
         p_in = curve_fit(z_func, r[mask], z[mask], p0=p0, maxfev=maxfev,
                          **kwargs)[0]
 
-        # Remove the pixels which are 'negative' depending on the tilt.
-        mask = y > 0.0 if np.sign(p_in[0]) else y < 0.0
+        # Remove the pixels which are 'negative' depending on the inclination.
+        mask = z > 0.0 if np.sign(p_in[0]) else z < 0.0
         popt = curve_fit(z_func, r[mask], z[mask], p0=p_in, maxfev=maxfev,
                          **kwargs)[0]
         return popt
@@ -924,8 +863,8 @@ class rotationmap:
             return ax
 
     def plot_surface(self, ax=None, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0,
-                     psi=0.0, z1=0.0, phi=1.0, tilt=0.0, r_min=0.0,
-                     r_max=None, ntheta=9, nrad=10, check_mask=True, **kwargs):
+                     psi=0.0, z1=0.0, phi=1.0, r_min=0.0, r_max=None, ntheta=9,
+                     nrad=10, check_mask=True, **kwargs):
         """
         Overplot the emission surface onto the provided axis.
 
@@ -944,9 +883,6 @@ class rotationmap:
                 emission surface. Should be opposite sign to z0.
             phi (Optional[float]): Flaring angle correction term for the
                 emission surface.
-            tilt (Optional[float]): Value between -1 and 1, describing the
-                rotation of the disk. For negative values, the disk is rotating
-                clockwise on the sky.
             r_min (Optional[float]): Inner radius to plot, default is 0.
             r_max (Optional[float]): Outer radius to plot.
             ntheta (Optional[int]): Number of theta contours to plot.
@@ -965,13 +901,13 @@ class rotationmap:
 
         # Front half of the disk.
         rf, tf, zf = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0,
-                                      psi=psi, z1=z1, phi=phi, tilt=tilt)
+                                      psi=psi, z1=z1, phi=phi)
         rf = np.where(zf >= 0.0, rf, np.nan)
         tf = np.where(zf >= 0.0, tf, np.nan)
 
         # Rear half of the disk.
         rb, tb, zb = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=-z0,
-                                      psi=psi, z1=-z1, phi=phi, tilt=tilt)
+                                      psi=psi, z1=-z1, phi=phi)
         rb = np.where(zb <= 0.0, rb, np.nan)
         tb = np.where(zb <= 0.0, tb, np.nan)
 
@@ -1049,15 +985,36 @@ class rotationmap:
                 ls=ls, lw=lw, color=lc, zorder=zo)
 
     def plot_maxima(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, r_max=None,
-                    plot_axes_kwargs={}, scatter_kwargs={}, return_ax=False):
+                    plot_axes_kwargs=None, scatter_kwargs=None,
+                    return_ax=False):
         """
         Mark the position of the maximum velocity as a function of radius. This
         can help demonstrate if there is an appreciable bend in velocity
-        contours indicative of a flared emission surface.
+        contours indicative of a flared emission surface. This function pulls
+        the results from fit_cube.get_peak_pix() for plotting.
+
+        Args:
+            x0 (Optional[float]): Source center x-offset in [arcsec].
+            y0 (Optional[float]): Source center y-offset in [arcsec].
+            inc (Optional[float]): Disk inclination in [degrees].
+            PA (Optional[float]): Disk position angle in [degrees].
+            r_max (Optional[float]): Maximum offset along the major axis to
+                plot in [arcsec]. This can never be larger than the span of the
+                x-axis.
+            plot_axes_kwargs (Optional[dict]): Dictionary of kwargs for the
+                plot_axes function.
+            scatter_kwargs (Optional[dict]): Dictionary of kwargs for the
+                scatter plot of the maximum pixels.
+            return_ax (Optional[bool]): If True, return the axis.
+
+        Returns:
+            ax (Matplotlib axis): If return_ax is True.
         """
 
         # Background figure.
         ax = self.plot_data(return_ax=True)
+        if plot_axes_kwargs is None:
+            plot_axes_kwargs = dict()
         self.plot_axes(ax=ax, x0=x0, y0=y0, inc=inc, PA=PA,
                        major=r_max if r_max is not None else 1.0,
                        **plot_axes_kwargs)
@@ -1069,23 +1026,27 @@ class rotationmap:
         x, y, r = x[mask], y[mask], r[mask]
 
         # Scatter plot of the pixels.
+        if scatter_kwargs is None:
+            scatter_kwargs = dict()
         cm = scatter_kwargs.pop('cmap', 'bone_r')
         ms = scatter_kwargs.pop('s', scatter_kwargs.pop('size', 5))
         ec = scatter_kwargs.pop('ec', scatter_kwargs.pop('edgecolor', 'k'))
         lw = scatter_kwargs.pop('lw', scatter_kwargs.pop('linewidth', 1.25))
-        ax.scatter(x, y, c=np.hypot(x, y), s=ms, lw=lw, cmap=cm, edgecolor=ec,
-                   vmin=0.0, vmax=r.max(), **scatter_kwargs)
+        if lw != 0.0:
+            ax.scatter(x, y, c=np.hypot(x, y), s=ms, lw=lw, cmap=cm,
+                       edgecolor=ec, vmin=0.0, vmax=r.max(), **scatter_kwargs)
         ax.scatter(x, y, c=np.hypot(x, y), s=ms, lw=0., cmap=cm, edgecolor=ec,
                    vmin=0.0, vmax=r.max(), **scatter_kwargs)
         if return_ax:
             return ax
 
     @staticmethod
-    def plot_walkers(samples, nburnin=None, labels=None):
+    def plot_walkers(samples, nburnin=None, labels=None, histogram=True):
         """Plot the walkers to check if they are burning in."""
 
         # Import matplotlib.
         import matplotlib.pyplot as plt
+        from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
         # Check the length of the label list.
         if labels is None:
@@ -1094,7 +1055,7 @@ class rotationmap:
 
         # Cycle through the plots.
         for s, sample in enumerate(samples):
-            ax = plt.subplots()[1]
+            fig, ax = plt.subplots()
             for walker in sample.T:
                 ax.plot(walker, alpha=0.1, color='k')
             ax.set_xlabel('Steps')
@@ -1103,12 +1064,33 @@ class rotationmap:
             if nburnin is not None:
                 ax.axvline(nburnin, ls=':', color='r')
 
+            # Include the histogram.
+            if histogram:
+                fig.set_size_inches(1.37 * fig.get_figwidth(),
+                                    fig.get_figheight(), forward=True)
+                ax_divider = make_axes_locatable(ax)
+                bins = np.linspace(ax.get_ylim()[0], ax.get_ylim()[1], 50)
+                hist, _ = np.histogram(sample[nburnin:].flatten(), bins=bins,
+                                       density=True)
+                bins = np.average([bins[1:], bins[:-1]], axis=0)
+                ax1 = ax_divider.append_axes("right", size="35%", pad="2%")
+                ax1.fill_betweenx(bins, hist, np.zeros(bins.size), step='mid',
+                                  color='darkgray', lw=0.0)
+                ax1.set_ylim(ax.get_ylim()[0], ax.get_ylim()[1])
+                ax1.set_xlim(0, ax1.get_xlim()[1])
+                ax1.set_yticklabels([])
+                ax1.set_xticklabels([])
+                ax1.tick_params(which='both', left=0, bottom=0)
+                ax1.spines['right'].set_visible(False)
+                ax1.spines['bottom'].set_visible(False)
+                ax1.spines['top'].set_visible(False)
+
     @staticmethod
     def plot_corner(samples, labels=None, quantiles=None):
         """Plot the corner plot to check for covariances."""
         import corner
         quantiles = [0.16, 0.5, 0.84] if quantiles is None else quantiles
-        corner.corner(samples, labels=labels, title_fmt='.4f',
+        corner.corner(samples, labels=labels, title_fmt='.4f', bins=30,
                       quantiles=quantiles, show_titles=True)
 
     def plot_beam(self, ax, dx=0.125, dy=0.125, **kwargs):
