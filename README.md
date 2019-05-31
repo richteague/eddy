@@ -15,7 +15,7 @@ To install the `eddy` packge, first clone the directory, then in the main direct
 pip install .
 ```
 
-The only real dependencies for this are `numpy`, `scipy`, `matplotlib`, [`emcee`](https://github.com/dfm/emcee) and [`corner`](https://github.com/dfm/corner.py). If you want to run the Gaussian Process method you will also need [`celerite`](https://github.com/dfm/celerite) which can be easily installed if you follow their [installation guide](https://celerite.readthedocs.io/en/stable/python/install/).
+The only real dependencies for this are `numpy`, `scipy`, `matplotlib`, [`emcee`](https://github.com/dfm/emcee), at least v3.0 or higher, and [`corner`](https://github.com/dfm/corner.py). If you want to run the Gaussian Process method you will also need [`celerite`](https://github.com/dfm/celerite) which can be easily installed if you follow their [installation guide](https://celerite.readthedocs.io/en/stable/python/install/).
 
 If things have installed correctly you should be able to run the [Jupyter Notebooks](https://github.com/richteague/eddy/tree/master/docs) with no errors. If something goes wrong, please [open an issue](https://github.com/richteague/eddy/issues/new).
 

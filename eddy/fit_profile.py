@@ -450,7 +450,7 @@ class profile(object):
 
         # Imports.
         import matplotlib.pyplot as plt
-
+        from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
         # Check the length of the label list.
         if labels is not None:

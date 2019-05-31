@@ -77,8 +77,8 @@ class rotationmap:
 
         # Convert the data to [km/s].
         if unit.lower() == 'm/s':
-            self.data /= 1e3
-            self.error /= 1e3
+            self.data *= 1e-3
+            self.error *= 1e-3
         elif unit.lower() != 'km/s':
             raise ValueError("unit must me 'm/s' or 'km/s'.")
 
@@ -120,7 +120,11 @@ class rotationmap:
                       plots=None, returns=None, pool=None, emcee_kwargs=None,
                       niter=1):
         """
-        Fit a Keplerian rotation profile to the data.
+        Fit a Keplerian rotation profile to the data. Note that for a disk with
+        a non-zero height, the sign of the inclination dictates the direction
+        of the tilt: a positive tilt rotates the disk about around the x-axis
+        such that the southern side of the disk is closer to the observer. The
+        same definition is used for the warps.
 
         Args:
             p0 (list): List of the free parameters to fit.
@@ -426,11 +430,6 @@ class rotationmap:
             params['dist'] = 100.
         if params.get('vlsr') is None:
             params['vlsr'] = self.vlsr
-        if params.get('beam') is None:
-            params['beam'] = False
-        elif params.get('beam'):
-            if self.bmaj is None:
-                params['beam'] = False
         return params
 
     # -- Deprojection functions. -- #
@@ -616,7 +615,7 @@ class rotationmap:
 
     def keplerian(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
                   z1=0.0, phi=1.0, w_i=0.0, w_r=1.0, w_t=0.0, mstar=1.0,
-                  dist=100., vlsr=0.0, **kwargs):
+                  dist=100., vlsr=0.0, shadowed=False, **kwargs):
         """
         Return a Keplerian rotation profile (not including pressure) in [m/s].
         This includes the deivation due to non-zero heights above the midplane,
@@ -643,13 +642,16 @@ class rotationmap:
             mstar (Optional[float]): Mass of the star in [Msun].
             dist (Optional[float]): Distance to the source in [parsec].
             vlsr (Optional[floar]): Systemic velocity in [m/s].
+            shadowed (Optional[bool]): If true, use a more robust, however
+                slower deprojection routine which accurately takes into account
+                shadowing at high inclinations.
 
         Returns:
             vproj (ndarray): Projected Keplerian rotation at each pixel (m/s).
         """
         coords = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0, psi=psi,
                                   z1=z1, phi=phi, w_i=w_i, w_r=w_r, w_t=w_t,
-                                  frame='cylindrical')
+                                  shadowed=shadowed, frame='cylindrical')
         rvals = coords[0] * sc.au * dist
         zvals = coords[2] * sc.au * dist
         vkep = sc.G * mstar * self.msun * np.power(rvals, 2.0)
@@ -664,8 +666,9 @@ class rotationmap:
                               psi=params['psi'], z1=params['z1'],
                               phi=params['phi'], w_i=params['w_i'],
                               w_r=params['w_r'], w_t=params['w_t'],
-                              mstar=params['mstar'], dist=params['dist'])
-        if params['beam']:
+                              mstar=params['mstar'], dist=params['dist'],
+                              shadowed=params.pop('shadowed', False))
+        if params.pop('beam', False):
             vkep = rotationmap._convolve_image(vkep, self._beamkernel())
         return vkep
 
