@@ -224,7 +224,7 @@ class rotationmap:
                                      nburnin=nburnin, nsteps=nsteps,
                                      **emcee_kwargs)
             if type(params['PA']) is int:
-                sampler.chain[:, :, params['PA']] %= 360.
+                sampler.chain[:, :, params['PA']] %= 360.0
             samples = sampler.chain[:, -int(nsteps):]
             samples = samples.reshape(-1, samples.shape[-1])
             p0 = np.median(samples, axis=0)
@@ -541,13 +541,6 @@ class rotationmap:
         """Return caresian sky coordinates in [arcsec, arcsec]."""
         return np.meshgrid(self.xaxis - x0, self.yaxis - y0)
 
-    '''
-    def _get_polar_sky_coords(self, x0, y0):
-        """Return polar sky coordinates in [arcsec, radians]."""
-        x_sky, y_sky = self._get_cart_sky_coords(x0, y0)
-        return np.hypot(y_sky, x_sky), np.arctan2(x_sky, y_sky)
-    '''
-
     def _get_midplane_cart_coords(self, x0, y0, inc, PA):
         """Return cartesian coordaintes of midplane in [arcsec, arcsec]."""
         x_sky, y_sky = self._get_cart_sky_coords(x0, y0)
@@ -656,7 +649,7 @@ class rotationmap:
         """
         coords = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0, psi=psi,
                                   z1=z1, phi=phi, w_i=w_i, w_r=w_r, w_t=w_t,
-                                   frame='polar')
+                                  frame='cylindrical')
         rvals = coords[0] * sc.au * dist
         zvals = coords[2] * sc.au * dist
         vkep = sc.G * mstar * self.msun * np.power(rvals, 2.0)
@@ -971,8 +964,9 @@ class rotationmap:
             return ax
 
     def plot_surface(self, ax=None, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0,
-                     psi=0.0, z1=0.0, phi=1.0, r_min=0.0, r_max=None, ntheta=9,
-                     nrad=10, check_mask=True, **kwargs):
+                     psi=0.0, z1=0.0, phi=1.0, w_i=0.0, w_r=1.0, w_t=0.0,
+                     r_min=0.0, r_max=None, ntheta=16, nrad=10,
+                     check_mask=True, **kwargs):
         """
         Overplot the emission surface onto the provided axis.
 
@@ -991,6 +985,10 @@ class rotationmap:
                 emission surface. Should be opposite sign to z0.
             phi (Optional[float]): Flaring angle correction term for the
                 emission surface.
+            w_i (Optional[float]): Warp inclination in [degrees] at the disk
+                center.
+            w_r (Optional[float]): Scale radius of the warp in [arcsec].
+            w_t (Optional[float]): Angle of nodes of the warp in [degrees].
             r_min (Optional[float]): Inner radius to plot, default is 0.
             r_max (Optional[float]): Outer radius to plot.
             ntheta (Optional[int]): Number of theta contours to plot.
