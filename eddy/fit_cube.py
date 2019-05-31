@@ -34,7 +34,7 @@ class rotationmap:
 
     msun = 1.988e30
     fwhm = 2. * np.sqrt(2 * np.log(2))
-    niter = 5
+    disk_coords_niter = 5
     priors = {}
 
     def __init__(self, path, uncertainty=None, clip=None, downsample=None,
@@ -62,8 +62,6 @@ class rotationmap:
                 offset [arcsec].
             unit (Optional[str]): Unit of the input data cube. By deafult
                 assumed to be [m/s].
-        Returns:
-            None
         """
 
         # Read in the data and position axes.
@@ -105,6 +103,8 @@ class rotationmap:
                 downsample = int(self.bmaj / self.dpix)
             self._downsample_cube(downsample)
             self.dpix = abs(np.diff(self.xaxis)).mean()
+        self.nypix = self.yaxis.size
+        self.nxpix = self.xaxis.size
         self.mask = np.isfinite(self.data)
 
         # Estimate the systemic velocity.
@@ -135,10 +135,13 @@ class rotationmap:
 
                 making sure the value is an integer. The values needed are:
                 'x0', 'y0', 'inc', 'PA', 'mstar', 'vlsr', 'dist'. If a flared
-                emission surface is wanted then you can add 'z0', 'psi' with
-                their descriptions found in disk_coords(). To include a
-                convolution with the beam stored in the header use
-                params['beam'] = True, where this must be a boolean.
+                emission surface is wanted then you can add 'z0', 'psi', 'z1'
+                and 'phi' with their descriptions found in disk_coords().
+                Similarly, a warp can be inclued with 'w_0', 'w_r', 'w_t' which
+                are described in disk_coords(). To include a convolution with
+                the beam stored in the header use params['beam'] = True. This
+                is only really necessary for low resolution maps or those made
+                using intensity-weighted average velocities.
             r_min (Optional[float]): Inner radius to fit in (arcsec).
             r_max (Optional[float]): Outer radius to fit in (arcsec).
             optimize (Optional[bool]): Use scipy.optimize to find the p0 values
@@ -149,7 +152,9 @@ class rotationmap:
                 optimise=False.
             niter (Optional[int]): Number of iterations to perform using the
                 median PDF values from the previous MCMC run as starting
-                positions.
+                positions. This is probably only useful if you have no idea
+                about the starting positions for the emission surface,
+                for example.
             nwalkers (Optional[int]): Number of walkers to use for the MCMC.
             scatter (Optional[float]): Scatter used in distributing walker
                 starting positions around the initial p0 values.
@@ -186,7 +191,9 @@ class rotationmap:
                                     inc=temp['inc'], PA=temp['PA'],
                                     z0=temp['z0'], psi=temp['psi'],
                                     z1=temp['z1'], phi=temp['phi'],
-                                    r_min=r_min, r_max=r_max)
+                                    w_i=temp['w_i'], w_r=temp['w_r'],
+                                    w_t=temp['w_t'], r_min=r_min,
+                                    r_max=r_max)
 
         # Check what the parameters are.
         labels = rotationmap._get_labels(params)
@@ -203,7 +210,9 @@ class rotationmap:
                                         inc=temp['inc'], PA=temp['PA'],
                                         z0=temp['z0'], psi=temp['psi'],
                                         z1=temp['z1'], phi=temp['phi'],
-                                        r_min=r_min, r_max=r_max)
+                                        w_i=temp['w_i'], w_r=temp['w_r'],
+                                        w_t=temp['w_t'], r_min=r_min,
+                                        r_max=r_max)
 
         # Set up and run the MCMC with emcee.
         time.sleep(0.5)
@@ -214,6 +223,8 @@ class rotationmap:
             sampler = self._run_mcmc(p0=p0, params=params, nwalkers=nwalkers,
                                      nburnin=nburnin, nsteps=nsteps,
                                      **emcee_kwargs)
+            if type(params['PA']) is int:
+                sampler.chain[:, :, params['PA']] %= 360.
             samples = sampler.chain[:, -int(nsteps):]
             samples = samples.reshape(-1, samples.shape[-1])
             p0 = np.median(samples, axis=0)
@@ -335,15 +346,18 @@ class rotationmap:
         """Set the default priors."""
         self.set_prior('x0', [-0.5, 0.5], 'flat')
         self.set_prior('y0', [-0.5, 0.5], 'flat')
-        self.set_prior('inc', [0., 90.0], 'flat')
+        self.set_prior('inc', [-90., 90.0], 'flat')
         self.set_prior('PA', [-360., 360.], 'flat')
         self.set_prior('mstar', [0.1, 5.], 'flat')
         self.set_prior('vlsr', [np.nanmin(self.data) * 1e3,
                                 np.nanmax(self.data) * 1e3], 'flat')
-        self.set_prior('z0', [-5., 5.], 'flat')
+        self.set_prior('z0', [0., 5.], 'flat')
         self.set_prior('psi', [0., 5.], 'flat')
-        self.set_prior('z1', [-5., 5.], 'flat')
+        self.set_prior('z1', [0., 5.], 'flat')
         self.set_prior('phi', [0., 5.], 'flat')
+        self.set_prior('w_i', [0., 90.], 'flat')
+        self.set_prior('w_r', [self.dpix, 1.14 * self.xaxis.max()], 'flat')
+        self.set_prior('w_t', [-180., 180.], 'flat')
 
     def _ln_prior(self, params):
         """Log-priors."""
@@ -354,7 +368,8 @@ class rotationmap:
         return lnp
 
     def _calc_ivar(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
-                   z1=0.0, phi=1.0, r_min=0.0, r_max=1e5):
+                   z1=0.0, phi=1.0, w_i=0.0, w_r=1.0, w_t=0.0, r_min=0.0,
+                   r_max=1e5):
         """Calculate the inverse variance including radius mask."""
         try:
             assert self.error.shape == self.data.shape
@@ -374,7 +389,7 @@ class rotationmap:
             if isinstance(params[k], int):
                 if not isinstance(params[k], bool):
                     idxs.append(params[k])
-                    labs.append(k)
+                    labs.append(r'${{\rm {}}}$'.format(k))
         return np.array(labs)[np.argsort(idxs)]
 
     @staticmethod
@@ -401,6 +416,12 @@ class rotationmap:
             params['z1'] = 0.0
         if params.get('phi') is None:
             params['phi'] = 1.0
+        if params.get('w_i') is None:
+            params['w_i'] = 0.0
+        if params.get('w_r') is None:
+            params['w_r'] = 1.0
+        if params.get('w_t') is None:
+            params['w_t'] = 0.0
         if params.get('dist') is None:
             params['dist'] = 100.
         if params.get('vlsr') is None:
@@ -415,19 +436,39 @@ class rotationmap:
     # -- Deprojection functions. -- #
 
     def disk_coords(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
-                    z1=0.0, phi=0.0, frame='polar', **kwargs):
+                    z1=0.0, phi=0.0, w_i=0.0, w_r=1.0, w_t=0.0,
+                    frame='cylindrical', shadowed=False, shadowed_kwargs=None,
+                    **kwargs):
         """
         Get the disk coordinates given certain geometrical parameters and an
         emission surface. The emission surface is parameterized as a powerlaw
-        profile: z(r) = z0 * (r / 1")^psi. For a razor thin disk, z0 = 0.0,
-        while for a conical disk, as described in Rosenfeld et al. (2013),
-        psi = 1.0.
+        profile:
+
+            z(r) = z0 * (r / 1")^psi +  z1 * (r / 1")^phi.
+
+        Where both z0 and z1 are given in [arcsec]. For a razor thin disk,
+        z0 = 0.0, while for a conical disk, as described in Rosenfeld et al.
+        (2013), psi = 1.0. We can also include a warp which is parameterized by
+
+            z_warp(r, t) = r * tan(w_i * exp(-(r / w_r)^2 / 2) * sin(t - w_t))
+
+        where w_i is the inclination in [radians] describing the warp at the
+        disk center. The width of the warp is given by w_r [arcsec] and w_t in
+        [radians] is the angle of nodes (where the warp is zero), relative to
+        the position angle of the disk, measured east of north.
+
+        ! WARNING !: If you are using a warp, increase the number of iterations
+        for the inference through self.disk_coords_niter (by default at 5).
+
+        ! WARNING !: For significant warps and / or flared surfaces with large
+        disk inclinations, shadowing may be present. Use shadowed=True if this
+        is likely.
 
         Args:
-            x0 (Optional[float]): Source right ascension offset (arcsec).
-            y0 (Optional[float]): Source declination offset (arcsec).
-            inc (Optional[float]): Source inclination (degrees).
-            PA (Optional[float]): Source position angle (degrees). Measured
+            x0 (Optional[float]): Source right ascension offset [arcsec].
+            y0 (Optional[float]): Source declination offset [arcsec].
+            inc (Optional[float]): Source inclination [degrees].
+            PA (Optional[float]): Source position angle [degrees]. Measured
                 between north and the red-shifted semi-major axis in an
                 easterly direction.
             z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
@@ -437,8 +478,18 @@ class rotationmap:
                 emission surface. Should be opposite sign to z0.
             phi (Optional[float]): Flaring angle correction term for the
                 emission surface.
+            w_i (Optional[float]): Warp inclination in [degrees] at the disk
+                center.
+            w_r (Optional[float]): Scale radius of the warp in [arcsec].
+            w_t (Optional[float]): Angle of nodes of the warp in [degrees].
             frame (Optional[str]): Frame of reference for the returned
-                coordinates. Either 'polar' or 'cartesian'.
+                coordinates. Either 'polar' or 'cylindrical'.
+            shadowed (Optional[bool]): If true, use a more robust, however
+                slower deprojection routine which accurately takes into account
+                shadowing at high inclinations.
+            shadowed_kwargs (Optional[dict]): Optional kwargs to be passed to
+                _get_shadowed_coords() including _get_diskframe_coords() and
+                griddata().
 
         Returns:
             c1 (ndarryy): Either r (cylindrical) or x depending on the frame.
@@ -449,28 +500,30 @@ class rotationmap:
         # Check the input variables.
 
         frame = frame.lower()
-        if frame not in ['cartesian', 'polar']:
+        if frame not in ['cylindrical', 'polar']:
             raise ValueError("frame must be 'cartesian' or 'polar'.")
 
-        # Define the emission surface function. This approach should leave
-        # some flexibility for more complex emission surface parameterizations.
+        # Define the emission surface, z_func, and the warp function, w_func.
 
-        def func(r):
+        def z_func(r):
             z = z0 * np.power(r, psi) + z1 * np.power(r, phi)
-            if z0 > 0.0:
-                return np.where(z > 0.0, z, 0.0)
-            else:
-                return np.where(z < 0.0, z, 0.0)
+            return np.where(z > 0.0, z, 0.0)
+
+        def w_func(r, t):
+            warp = np.radians(w_i) * np.exp(-0.5 * (r / w_r)**2)
+            return r * np.tan(warp * np.sin(t - np.radians(w_t)))
 
         # Calculate the pixel values.
-
-        if frame == 'cartesian':
-            c1, c2 = self._get_flared_cart_coords(x0, y0, inc, PA, func)
-            c3 = func(np.hypot(c1, c2))
+        if shadowed:
+            if shadowed_kwargs is None:
+                shadowed_kwargs = {}
+            r, t, z = self._get_shadowed_coords(x0, y0, inc, PA, z_func,
+                                                w_func, **shadowed_kwargs)
         else:
-            c1, c2 = self._get_flared_polar_coords(x0, y0, inc, PA, func)
-            c3 = func(c1)
-        return c1, c2, c3
+            r, t, z = self._get_flared_coords(x0, y0, inc, PA, z_func, w_func)
+        if frame == 'cylindrical':
+            return r, t, z
+        return r * np.cos(t), r * np.sin(t), z
 
     @staticmethod
     def _rotate_coords(x, y, PA):
@@ -488,15 +541,17 @@ class rotationmap:
         """Return caresian sky coordinates in [arcsec, arcsec]."""
         return np.meshgrid(self.xaxis - x0, self.yaxis - y0)
 
+    '''
     def _get_polar_sky_coords(self, x0, y0):
         """Return polar sky coordinates in [arcsec, radians]."""
         x_sky, y_sky = self._get_cart_sky_coords(x0, y0)
         return np.hypot(y_sky, x_sky), np.arctan2(x_sky, y_sky)
+    '''
 
     def _get_midplane_cart_coords(self, x0, y0, inc, PA):
         """Return cartesian coordaintes of midplane in [arcsec, arcsec]."""
         x_sky, y_sky = self._get_cart_sky_coords(x0, y0)
-        x_rot, y_rot = rotationmap._rotate_coords(x_sky, y_sky, PA)
+        x_rot, y_rot = self._rotate_coords(x_sky, y_sky, PA)
         return rotationmap._deproject_coords(x_rot, y_rot, inc)
 
     def _get_midplane_polar_coords(self, x0, y0, inc, PA):
@@ -504,52 +559,104 @@ class rotationmap:
         x_mid, y_mid = self._get_midplane_cart_coords(x0, y0, inc, PA)
         return np.hypot(y_mid, x_mid), np.arctan2(y_mid, x_mid)
 
-    def _get_flared_polar_coords(self, x0, y0, inc, PA, func):
-        """Return polar coordinates of surface in [arcsec, radians]."""
+    def _get_flared_coords(self, x0, y0, inc, PA, z_func, w_func):
+        """Return cyclindrical coords of surface in [arcsec, rad, arcsec]."""
         x_mid, y_mid = self._get_midplane_cart_coords(x0, y0, inc, PA)
-        r_mid = np.hypot(y_mid, x_mid)
-        for _ in range(self.niter):
-            y_tmp = y_mid - func(r_mid) * np.tan(np.radians(inc))
-            r_mid = np.hypot(y_tmp, x_mid)
-        return r_mid, np.arctan2(y_tmp, x_mid)
+        r_tmp, t_tmp = np.hypot(x_mid, y_mid), np.arctan2(y_mid, x_mid)
+        for _ in range(self.disk_coords_niter):
+            z_tmp = z_func(r_tmp) + w_func(r_tmp, t_tmp)
+            y_tmp = y_mid + z_tmp * np.tan(np.radians(inc))
+            r_tmp = np.hypot(y_tmp, x_mid)
+            t_tmp = np.arctan2(y_tmp, x_mid)
+        return r_tmp, t_tmp, z_func(r_tmp)
 
-    def _get_flared_cart_coords(self, x0, y0, inc, PA, func):
-        """Return cartesian coordinates of surface in [arcsec, arcsec]."""
-        r_mid, t_mid = self._get_flared_polar_coords(x0, y0, inc, PA, func)
-        return r_mid * np.cos(t_mid), r_mid * np.sin(t_mid)
+    def _get_shadowed_coords(self, x0, y0, inc, PA, z_func, w_func, **kwargs):
+        """Return cyclindrical coords of surface in [arcsec, rad, arcsec]."""
+
+        # Make the disk-frame coordinates.
+        extend = kwargs.pop('extend', 2.0)
+        oversample = kwargs.pop('oversample', 2.0)
+        xdisk, ydisk, rdisk, tdisk = self._get_diskframe_coords(extend,
+                                                                oversample)
+        zdisk = z_func(rdisk) + w_func(rdisk, tdisk)
+
+        # Incline the disk.
+        inc = np.radians(inc)
+        x_dep = xdisk
+        y_dep = ydisk * np.cos(inc) - zdisk * np.sin(inc)
+        z_dep = ydisk * np.sin(inc) + zdisk * np.cos(inc)
+
+        # Remove shadowed pixels.
+        if inc < 0.0:
+            y_dep = np.maximum.accumulate(y_dep, axis=0)
+        else:
+            y_dep = np.minimum.accumulate(y_dep[::-1], axis=0)[::-1]
+
+        # Rotate and the disk.
+        x_rot, y_rot = self._rotate_coords(x_dep, y_dep, PA)
+        x_rot, y_rot = x_rot + x0, y_rot + y0
+        z_rot = z_dep
+
+        # Grid the disk.
+        from scipy.interpolate import griddata
+        disk = (x_rot.flatten(), y_rot.flatten())
+        grid = (self.xaxis[None, :], self.yaxis[:, None])
+        kwargs['method'] = kwargs.pop('method', 'nearest')
+        r_obs = griddata(disk, rdisk.flatten(), grid, **kwargs)
+        t_obs = griddata(disk, tdisk.flatten(), grid, **kwargs)
+        z_obs = griddata(disk, zdisk.flatten(), grid, **kwargs)
+        return r_obs, t_obs, z_obs
+        #return np.hypot(x_obs, y_obs), np.arctan2(y_obs, x_obs), z_obs
+
+    def _get_diskframe_coords(self, extend=2.0, oversample=0.5):
+        """Disk-frame coordinates based on the cube axes."""
+        x_disk = np.linspace(extend * self.xaxis[0], extend * self.xaxis[-1],
+                             int(self.nxpix * oversample))[::-1]
+        y_disk = np.linspace(extend * self.yaxis[0], extend * self.yaxis[-1],
+                             int(self.nypix * oversample))
+        x_disk, y_disk = np.meshgrid(x_disk, y_disk)
+        r_disk = np.hypot(x_disk, y_disk)
+        t_disk = np.arctan2(y_disk, x_disk)
+        return x_disk, y_disk, r_disk, t_disk
 
     # -- Functions to build Keplerian rotation profiles. -- #
 
     def keplerian(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
-                  z1=0.0, phi=1.0, mstar=1.0, dist=100., vlsr=0.0, **kwargs):
+                  z1=0.0, phi=1.0, w_i=0.0, w_r=1.0, w_t=0.0, mstar=1.0,
+                  dist=100., vlsr=0.0, **kwargs):
         """
         Return a Keplerian rotation profile (not including pressure) in [m/s].
         This includes the deivation due to non-zero heights above the midplane,
-        see Teague et al. (2018a,c) for a thorough description.
+        see the documents in disk_coords() for more details of the parameters.
 
         Args:
-            x0 (Optional[float]): Source right ascension offset (arcsec).
-            y0 (Optional[float]): Source declination offset (arcsec).
-            inc (Optional[float]): Source inclination (degrees).
-            PA (Optional[float]): Source position angle (degrees). Measured
+            x0 (Optional[float]): Source right ascension offset [arcsec].
+            y0 (Optional[float]): Source declination offset [arcsec].
+            inc (Optional[float]): Source inclination [degrees].
+            PA (Optional[float]): Source position angle [degrees]. Measured
                 between north and the red-shifted semi-major axis in an
                 easterly direction.
             z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
                 To get the far side of the disk, make this number negative.
             psi (Optional[float]): Flaring angle for the emission surface.
             z1 (Optional[float]): Aspect ratio correction term at 1" for the
-                emission surface. Should be opposite sign to z0.
+                emission surface. In general, should be opposite sign to z0.
             phi (Optional[float]): Flaring angle correction term for the
                 emission surface.
-            mstar (Optional[float]): Mass of the star in (solar masses).
-            dist (Optional[float]): Distance to the source in (parsec).
-            vlsr (Optional[floar]): Systemic velocity in (m/s).
+            w_i (Optional[float]): Warp inclination in [degrees] at the disk
+                center.
+            w_r (Optional[float]): Scale radius of the warp in [arcsec].
+            w_t (Optional[float]): Angle of nodes of the warp in [degrees].
+            mstar (Optional[float]): Mass of the star in [Msun].
+            dist (Optional[float]): Distance to the source in [parsec].
+            vlsr (Optional[floar]): Systemic velocity in [m/s].
 
         Returns:
             vproj (ndarray): Projected Keplerian rotation at each pixel (m/s).
         """
         coords = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0, psi=psi,
-                                  z1=z1, phi=phi, frame='polar')
+                                  z1=z1, phi=phi, w_i=w_i, w_r=w_r, w_t=w_t,
+                                   frame='polar')
         rvals = coords[0] * sc.au * dist
         zvals = coords[2] * sc.au * dist
         vkep = sc.G * mstar * self.msun * np.power(rvals, 2.0)
@@ -562,8 +669,9 @@ class rotationmap:
                               inc=params['inc'], PA=params['PA'],
                               vlsr=params['vlsr'], z0=params['z0'],
                               psi=params['psi'], z1=params['z1'],
-                              phi=params['phi'], mstar=params['mstar'],
-                              dist=params['dist'])
+                              phi=params['phi'], w_i=params['w_i'],
+                              w_r=params['w_r'], w_t=params['w_t'],
+                              mstar=params['mstar'], dist=params['dist'])
         if params['beam']:
             vkep = rotationmap._convolve_image(vkep, self._beamkernel())
         return vkep

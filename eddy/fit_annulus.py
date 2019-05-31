@@ -205,7 +205,7 @@ class annulus(object):
         sampler = emcee.EnsembleSampler(nwalkers, p0.shape[1],
                                         self._lnprobability,
                                         args=(p0[:, 0].mean(), resample))
-        sampler.run_mcmc(p0, nburnin + nsteps)
+        sampler.run_mcmc(p0, nburnin + nsteps, progress=True)
         samples = sampler.chain[:, -nsteps:]
         samples = samples.reshape(-1, samples.shape[-1])
 
