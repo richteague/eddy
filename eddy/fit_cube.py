@@ -223,17 +223,33 @@ class rotationmap:
         nwalkers = 2 * ndim if nwalkers is None else nwalkers
         emcee_kwargs = {} if emcee_kwargs is None else emcee_kwargs
         emcee_kwargs['scatter'], emcee_kwargs['pool'] = scatter, pool
-        for _ in range(int(niter)):
+        for n in range(int(niter)):
+
+            # Recalculate the uncertainties for each iteration.
+            if n > 0:
+                temp = rotationmap._populate_dictionary(p0, params)
+                temp = self._verify_dictionary(temp)
+                self.ivar = self._calc_ivar(x0=temp['x0'], y0=temp['y0'],
+                                            inc=temp['inc'], PA=temp['PA'],
+                                            z0=temp['z0'], psi=temp['psi'],
+                                            z1=temp['z1'], phi=temp['phi'],
+                                            w_i=temp['w_i'], w_r=temp['w_r'],
+                                            w_t=temp['w_t'], r_min=r_min,
+                                            r_max=r_max)
+
+            # Run the sampler.
             sampler = self._run_mcmc(p0=p0, params=params, nwalkers=nwalkers,
                                      nburnin=nburnin, nsteps=nsteps,
                                      **emcee_kwargs)
             if type(params['PA']) is int:
                 sampler.chain[:, :, params['PA']] %= 360.0
+
+            # Split off the samples.
             samples = sampler.chain[:, -int(nsteps):]
             samples = samples.reshape(-1, samples.shape[-1])
             p0 = np.median(samples, axis=0)
-        medians = rotationmap._populate_dictionary(p0, params)
-        medians = self._verify_dictionary(medians)
+            medians = rotationmap._populate_dictionary(p0, params)
+            medians = self._verify_dictionary(medians)
 
         # Diagnostic plots.
         if plots is None:
@@ -596,8 +612,8 @@ class rotationmap:
         kwargs['method'] = kwargs.pop('method', 'nearest')
         r_obs = griddata(disk, rdisk.flatten(), grid, **kwargs)
         t_obs = griddata(disk, tdisk.flatten(), grid, **kwargs)
-        z_obs = griddata(disk, zdisk.flatten(), grid, **kwargs)
-        return r_obs, t_obs, z_obs
+        #z_obs = griddata(disk, zdisk.flatten(), grid, **kwargs)
+        return r_obs, t_obs, z_func(r_obs)
         #return np.hypot(x_obs, y_obs), np.arctan2(y_obs, x_obs), z_obs
 
     def _get_diskframe_coords(self, extend=2.0, oversample=0.5):
@@ -1216,14 +1232,14 @@ class rotationmap:
 
     def _gentrify_plot(self, ax):
         """Gentrify the plot."""
-        from matplotlib.ticker import MultipleLocator
+        from matplotlib.ticker import MaxNLocator
         ax.set_aspect(1)
         ax.grid(ls=':', color='k', alpha=0.1, lw=0.5)
         ax.tick_params(which='both', right=True, top=True)
         ax.set_xlim(self.xaxis.max(), self.xaxis.min())
         ax.set_ylim(self.yaxis.min(), self.yaxis.max())
-        ax.xaxis.set_major_locator(MultipleLocator(1.0))
-        ax.yaxis.set_major_locator(MultipleLocator(1.0))
+        ax.xaxis.set_major_locator(MaxNLocator(5, min_n_ticks=3))
+        ax.yaxis.set_major_locator(MaxNLocator(5, min_n_ticks=3))
         ax.set_xlabel('Offset (arcsec)')
         ax.set_ylabel('Offset (arcsec)')
         if self.bmaj is not None:
