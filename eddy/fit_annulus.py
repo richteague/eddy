@@ -1,8 +1,4 @@
-"""
-A class to load an annulus of spectra and ther associated polar angles. By
-shifting and stacking the spectra, one can measure extremely precise rotational
-and radial velocities, as described in Teague et al. (2018a, 2018c, in prep.).
-"""
+# -*- coding: utf-8 -*-
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -17,27 +13,29 @@ try:
 except ImportError:
     celerite_installed = False
 
+__all__ = ['annulus']
 
 class annulus(object):
+    """
+    A class containing an annulus of spectra with their associated polar angles
+    measured east of north from the redshifted major axis.
 
-    def __init__(self, spectra, theta, velax, suppress_warnings=True,
-                 remove_empty=True, sort_spectra=True):
-        """
-        Initialize the class.
+    Args:
+        spectra (ndarray): Array of shape [N, M] of spectra to shift and
+            fit, where N is the number of spectra and M is the length of
+            the velocity axis.
+        theta (ndarray): Polar angles in [rad] of each of the spectra. Note
+            that ``spectra.shape[0] == theta.shape[0]``.
+        velax (ndarray): Velocity axis in [m/s] of the spectra. Note that
+            ``spectra.shape[1] == velax.shape[0]``.
+        remove_empty (optional[bool]): Remove empty spectra.
+        sort_spectra (optional[bool]): Sorted the spectra into increasing
+            ``theta``.
+        suppress_warnings (optional[bool]): If ``True``, suppress all warnings.
+    """
 
-        Args:
-            spectra (ndarray): Array of shape [N, M] of spectra to shift and
-                fit, where N is the number of spectra and M is the length of
-                the velocity axis.
-            theta (ndarray): Polar angles in [rad] of each of the spectra. Note
-                that spectra.shape[0] == theta.shape[0].
-            velax (ndarray): Velocity axis in [m/s] of the spectra. Note that
-                spectra.shape[1] == velax.shape[0].
-            suppress_warnings (optional[bool]): If True, suppress all warnings.
-            remove_empty (optional[bool]): Remove empty spectra.
-            sort_spectra (optional[bool]): Sorted the spectra into increasing
-                polar angle.
-        """
+    def __init__(self, spectra, theta, velax, remove_empty=True,
+                 sort_spectra=True, suppress_warnings=True):
 
         # Suppress warnings.
         if suppress_warnings:
@@ -85,51 +83,57 @@ class annulus(object):
 
     # -- New Functions to derive 3D Velocity Structure -- #
 
-    def get_vlos(self, fit_method='GP', p0=None, fit_vrad=True, resample=False,
+    def get_vlos(self, p0=None, fit_method='GP', fit_vrad=True, resample=False,
                  optimize=True, nwalkers=256, nburnin=100, nsteps=50,
                  scatter=1e-3, optimize_kwargs=None, plot_walkers=True,
                  plot_corner=True, return_samples=False):
-        """Infer the requested velocities by shifting lines back to a common
+        """
+        Infer the requested velocities by shifting lines back to a common
         center and stacking. The quality of fit is given by the selected
-        method which must be 'dV', 'GP' or 'SNR'.
+        method which must be ``'dv'``, ``'GP'`` or ``'SNR'``.
 
         Args:
-            fit_method (str): Method used to define the quality of fit. Must be
-                either 'dV' to find the minimum linewidth (as in Teague at al.
-                2018a), 'GP' to model the emission profile as a Gaussian
-                Process (as in Teague et al. 2018b), or 'SNR' to maximize the
-                signal to noise as in Yen et al. (2018).
+            fit_method (optional[str]): Method used to define the quality of
+                fit. Must be either ``'dV'`` to find the minimum linewidth, as
+                in `Teague et al. (2018a)`_, ``'GP'`` to model the emission
+                profile as Gaussian Process, as in `Teague et al. (2018b)`_, or
+                ``'SNR'`` to maximize the signal to noise, as in `Yen et al.
+                (2016)`_.
             p0 (optional[list]): Starting positions for the minimization. If
                 nothing is provided these will be guessed but this may not
                 result in very good starting positions.
             fit_vrad (bool): Include radial motion in the fit.
-            resample (Optional[bool]): Resample the shifted spectra by this
-                factor. For example, resample = 2 will shift and bin the
+            resample (optional[bool]): Resample the shifted spectra by this
+                factor. For example, ``resample=2`` will shift and bin the
                 spectrum down to sampling rate twice that of the original data.
                 Not recommended for the GP approach.
-            optimize (Optional[bool]): Optimize the starting positions before
+            optimize (optional[bool]): Optimize the starting positions before
                 the MCMC runs. If an integer, the number of iterations to use
                 of optimization.
-            nwalkers (Optional[int]): Number of walkers used for the MCMC runs.
-            nburnin (Optional[int]): Number of steps used to burn in walkers.
-            nsteps (Optional[int]): Number of steps taken to sample posteriors.
-            scatter (Optional[float]): Scatter applied to the starting
+            nwalkers (optional[int]): Number of walkers used for the MCMC runs.
+            nburnin (optional[int]): Number of steps used to burn in walkers.
+            nsteps (optional[int]): Number of steps taken to sample posteriors.
+            scatter (optional[float]): Scatter applied to the starting
                 positions before running the MCMC.
-            plot_walkers (Optional[bool]): Plot the trace of the walkers.
-            plot_corner (Optional[bool]): Plot the covariances of the
-                posteriors using corner.py.
-            return_samples (Optional[bool]): If True, return the samples of the
-                posterior disitrbutions rather than the [16, 50, 84]
+            plot_walkers (optional[bool]): Plot the trace of the walkers.
+            plot_corner (optional[bool]): Plot the covariances of the
+                posteriors using ``corner.py``.
+            return_samples (optional[bool]): If True, return the samples of the
+                posterior disitrbutions rather than the 16th, 50th and 84th
                 percentiles.
-        Returns:
-            res: The results of the optimization, depending on the method
-                chosen and the various parameters.
+
+        .. _Teague et al. (2018a): https://ui.adsabs.harvard.edu/abs/2018ApJ...860L..12T/abstract
+        .. _Teague et al. (2018b): https://ui.adsabs.harvard.edu/abs/2018ApJ...868..113T/abstract
+        .. _Yen et al. (2016): https://ui.adsabs.harvard.edu/abs/2016ApJ...832..204Y/abstract
+
         """
 
         # Check the input variables.
         fit_method = fit_method.lower()
         if fit_method not in ['dv', 'gp', 'snr']:
             raise ValueError("method must be 'dV', 'GP' or 'SNR'.")
+        if fit_methon == 'snr':
+            raise NotImplementedError("Implementation coming soon.")
         if fit_method == 'gp' and resample:
             print("WARNING: Resampling with the GP method is not advised.")
         if fit_method == 'gp' and not celerite_installed:
@@ -625,7 +629,14 @@ class annulus(object):
 
     def deprojected_spectrum(self, vrot, vrad=0.0, resample=False,
                              scatter=False):
-        """Returns (x, y) of collapsed deprojected spectrum."""
+        """
+        Returns (x, y) of collapsed deprojected spectrum.
+
+        Args:
+
+        Returns:
+
+        """
         vlos = self.calc_vlos(vrot=vrot, vrad=vrad)
         vpnts = self.velax[None, :] - vlos[:, None]
         vpnts, spnts = self._order_spectra(vpnts=vpnts.flatten())
