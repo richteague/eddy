@@ -37,7 +37,7 @@ extensions = [
     'nbsphinx']
 
 # Is this really necessary...
-#autodoc_mock_imports = ['eddy', 'emcee', 'astropy', 'scipy']
+autodoc_mock_imports = ['astropy']
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
