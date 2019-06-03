@@ -4,14 +4,14 @@ eddy - Extracting Disk Dynamics
 *eddy* provides a suite of tools to extract kinematical information from
 spatially and spectrally resolved line data.
 
-The :class:`fit_cube.rotationmap` class enables the fitting of a Keplerian
+The :class:`eddy.fit_cube.rotationmap` class enables the fitting of a Keplerian
 rotation pattern to a rotation map to infer geometrical properties of the disk,
 a dynamical mass of the star, or to infer the presence of a flared emission
 surface or warp in the disk.
 
-The :class:`fit_annulus.annulus` class contains the functionality to infer rotational and radial
-velocities based on an annulus of spectra extracted from an azimuthally
-symmetric disk.
+The :class:`eddy.fit_annulus.annulus` class contains the functionality to infer
+rotational and radial velocities based on an annulus of spectra extracted from
+an azimuthally symmetric disk.
 
 
 Installation
@@ -38,7 +38,7 @@ Contents
    user/rotationmap
 
 .. toctree::
-   :maxdepth: 3
+   :maxdepth: 2
    :caption: Tutorials
 
    tutorials/fitannulus_1
