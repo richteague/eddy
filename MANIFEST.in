@@ -1,4 +1,2 @@
-include docs/cubes/*.fits
-include docs/images/*.png
-include docs/*.ipynb
+include docs/*
 include README.md
