@@ -28,7 +28,7 @@ class rotationmap:
             If you use ``downsample='beam'`` it will sample roughly
             spatially independent pixels using the beam major axis as the
             spacing.
-        x0 (optional[float]): Recenter the iamge to this offset.
+        x0 (optional[float]): Recenter the image to this offset.
         y0 (optional[float]): Recenter the image to this offset.
         unit (optional[str]): Unit of the input data cube. By deafult
             assumed to be [m/s].
@@ -101,34 +101,46 @@ class rotationmap:
         such that the southern side of the disk is closer to the observer. The
         same definition is used for the warps.
 
+        The function must be provided with a dictionary of parameters,
+        ``params`` where key is the parameter and its value is either the fixed
+        value this will take,
+
+            ``params['PA'] = 45.0``
+
+        would fix position angle to 45 degrees. Or, if an integeter, the index
+        in the starting positions, ``p0``, such that,
+
+            ``params['mstar'] = 0``
+
+        would mean that the first value in ``p0`` is the guess for ``'mstar'``.
+
+        For a list of the geometrical parameters, included flared emission
+        surfaces or warps, see :func:`disk_coords`. In addition to these
+        geometrical properties ``params`` also requires ``'mstar'``,
+        ``'vlsr'``, ``'dist'``.
+
+        To include a spatial convolution of the model rotation map you may also
+        set ``params['beam']=True``, however this is only really necessary for
+        low spatial resolution data, or for rotation maps made via the
+        intensity-weighted average velocity.
+
         Args:
             p0 (list): List of the free parameters to fit.
-            params (dictionary): Dictionary of the parameters used for the
-                Keplerian model. If the value is fixed, specify the values:
-                ``params['x0'] = 0.45``, while if it is a free parameter,
-                provide the index in p0: ``params['x0'] = 0``, making sure the
-                value is an integer. The values needed are: ``'x0'``, ``'y0'``,
-                ``'inc'``, ``'PA'``, ``'mstar'``, ``'vlsr'``, ``'dist'``. If a
-                flared emission surface is wanted then you can add ``'z0'``,
-                ``'psi'``, ``'z1'`` and ``'phi'`` with their descriptions found
-                in :func:`disk_coords`. Similarly, a warp can be inclued with
-                ``'w_0'``, ``'w_r'`` and ``'w_t'``. To include a convolution
-                with the beam stored in the header use ``params['beam']=True``.
-                This is only really necessary for low resolution maps or those
-                made using intensity-weighted average velocities.
+            params (dictionary): Dictionary of the model parameters.
             r_min (optional[float]): Inner radius to fit in [arcsec].
             r_max (optional[float]): Outer radius to fit in [arcsec].
-            optimize (optional[bool]): Use scipy.optimize to find the p0 values
-                which maximize the likelihood. Better results will likely be
-                found. Note that for the masking the default ``p0`` and
-                ``params`` values are used for the deprojection, or those found
-                from the optimization. If this results in a poor initial mask,
-                try with ``optimise=False``.
+            optimize (optional[bool]): Use ``scipy.optimize`` to find the
+                ``p0`` values which maximize the likelihood. Better results
+                will likely be found. Note that for the masking the default
+                ``p0`` and ``params`` values are used for the deprojection, or
+                those foundvfrom the optimization. If this results in a poor
+                initial mask, try with ``optimise=False`` or with a ``niter``
+                value larger than 1.
             niter (optional[int]): Number of iterations to perform using the
                 median PDF values from the previous MCMC run as starting
                 positions. This is probably only useful if you have no idea
-                about the starting positions for the emission surface,
-                for example.
+                about the starting positions for the emission surface or if you
+                want to remove walkers stuck in local minima.
             nwalkers (optional[int]): Number of walkers to use for the MCMC.
             scatter (optional[float]): Scatter used in distributing walker
                 starting positions around the initial p0 values.
@@ -296,9 +308,9 @@ class rotationmap:
             z_1 \times \left(\frac{r}{1^{\prime\prime}}\right)^{\varphi}
 
         Where both ``z0`` and ``z1`` are given in [arcsec]. For a razor thin
-        disk, ``z0 = 0.0``, while for a conical disk, as described in
-        `Rosenfeld et al. (2013)`_, ``psi = 1.0``. We can also include a warp
-        which is parameterized by,
+        disk, ``z0=0.0``, while for a conical disk, as described in `Rosenfeld
+        et al. (2013)`_, ``psi=1.0``. We can also include a warp which is
+        parameterized by,
 
         .. math::
 
@@ -317,36 +329,34 @@ class rotationmap:
             5). For high inclinations, also set ``shadowed=True``.
 
         Args:
-            x0 (Optional[float]): Source right ascension offset [arcsec].
-            y0 (Optional[float]): Source declination offset [arcsec].
-            inc (Optional[float]): Source inclination [degrees].
-            PA (Optional[float]): Source position angle [degrees]. Measured
+            x0 (optional[float]): Source right ascension offset [arcsec].
+            y0 (optional[float]): Source declination offset [arcsec].
+            inc (optional[float]): Source inclination [degrees].
+            PA (optional[float]): Source position angle [degrees]. Measured
                 between north and the red-shifted semi-major axis in an
                 easterly direction.
-            z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
+            z0 (optional[float]): Aspect ratio at 1" for the emission surface.
                 To get the far side of the disk, make this number negative.
-            psi (Optional[float]): Flaring angle for the emission surface.
-            z1 (Optional[float]): Aspect ratio correction term at 1" for the
-                emission surface. Should be opposite sign to z0.
-            phi (Optional[float]): Flaring angle correction term for the
+            psi (optional[float]): Flaring angle for the emission surface.
+            z1 (optional[float]): Correction term for ``z0``.
+            phi (optional[float]): Flaring angle correction term for the
                 emission surface.
-            w_i (Optional[float]): Warp inclination in [degrees] at the disk
+            w_i (optional[float]): Warp inclination in [degrees] at the disk
                 center.
-            w_r (Optional[float]): Scale radius of the warp in [arcsec].
-            w_t (Optional[float]): Angle of nodes of the warp in [degrees].
-            frame (Optional[str]): Frame of reference for the returned
-                coordinates. Either 'polar' or 'cylindrical'.
-            shadowed (Optional[bool]): If true, use a more robust, however
+            w_r (optional[float]): Scale radius of the warp in [arcsec].
+            w_t (optional[float]): Angle of nodes of the warp in [degrees].
+            frame (optional[str]): Frame of reference for the returned
+                coordinates. Either ``'polar'`` or ``'cylindrical'``.
+            shadowed (optional[bool]): If true, use a more robust, however
                 slower deprojection routine which accurately takes into account
                 shadowing at high inclinations.
-            shadowed_kwargs (Optional[dict]): Optional kwargs to be passed to
-                _get_shadowed_coords() including _get_diskframe_coords() and
-                griddata().
+            shadowed_kwargs (optional[dict]): Optional kwargs to be passed to
+                ``_get_shadowed_coords`` including ``_get_diskframe_coords``
+                and ``scipy.interpolate.griddata``.
 
         Returns:
-            ndarryy: Either r) or x depending on the frame.
-            ndarray: Either theta or y depending on the frame.
-            ndarray: Height above the midplane, z.
+            Either the ``(r, phi, z)`` coordinates if ``frame='cylindrical'``
+            or ``(x, y, z)`` coordinates if ``frame='cartesian'``.
         """
 
         # Check the input variables.
