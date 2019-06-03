@@ -143,7 +143,8 @@ class annulus(object):
         if fit_method == 'gp':
             if resample:
                 print("WARNING: Resampling with the GP method is not advised.")
-            return self._fitting_GP(p0=p0, nwalkers=nwalkers, nsteps=nsteps,
+            return self._fitting_GP(p0=p0, fit_vrad=fit_vrad,
+                                    nwalkers=nwalkers, nsteps=nsteps,
                                     nburnin=nburnin, scatter=scatter,
                                     plots=plots, returns=returns,
                                     resample=resample,
@@ -161,9 +162,9 @@ class annulus(object):
 
     # -- Gaussian Processes Approach -- #
 
-    def _fitting_GP(self, p0=None, optimize=False, nwalkers=64, nburnin=50,
-                    nsteps=100, resample=False, scatter=1e-3, plots=None,
-                    returns=None, optimize_kwargs=None):
+    def _fitting_GP(self, p0=None, fit_vrad=False, optimize=False, nwalkers=64,
+                    nburnin=50, nsteps=100, resample=False, scatter=1e-3,
+                    plots=None, returns=None, optimize_kwargs=None):
         """
         Wrapper for the GP fitting.
 
@@ -188,7 +189,7 @@ class annulus(object):
 
         # Starting positions.
         if p0 is None:
-            p0 = self.guess_parameters_GP(fit=True)
+            p0 = self._guess_parameters_GP(fit=True)
             if not fit_vrad:
                 p0 = np.concatenate([p0[:1], p0[-3:]])
         p0 = np.atleast_1d(p0)
@@ -207,8 +208,6 @@ class annulus(object):
 
         # Run the sampler
         import emcee
-        if emcee_kwargs is None:
-            emcee_kwargs = {}
         sampler = emcee.EnsembleSampler(nwalkers, p0.shape[1],
                                         self._lnprobability,
                                         args=(p0[:, 0].mean(), resample))

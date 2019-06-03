@@ -43,6 +43,7 @@ Contents
 
    tutorials/fitannulus_1
    tutorials/fitannulus_2
+   tutorials/extractingdata
    tutorials/fitcube_1
    tutorials/fitcube_2
 
