@@ -1,0 +1,4 @@
+phinx>=1.7.5
+pandoc
+jupyter
+nbsphinx
