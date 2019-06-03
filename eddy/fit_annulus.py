@@ -1,8 +1,4 @@
-"""
-A class to load an annulus of spectra and ther associated polar angles. By
-shifting and stacking the spectra, one can measure extremely precise rotational
-and radial velocities, as described in Teague et al. (2018a, 2018c, in prep.).
-"""
+# -*- coding: utf-8 -*-
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -17,27 +13,27 @@ try:
 except ImportError:
     celerite_installed = False
 
+__all__ = ['annulus']
 
 class annulus(object):
+    """
+    A class containing an annulus of spectra with their associated polar angles
+    measured east of north from the redshifted major axis.
 
-    def __init__(self, spectra, theta, velax, suppress_warnings=True,
-                 remove_empty=True, sort_spectra=True):
-        """
-        Initialize the class.
+    Args:
+        spectra (ndarray): Array of shape ``[N, M]`` of spectra to shift and
+            fit, where ``N`` is the number of spectra and ``M`` is the length
+            of the velocity axis.
+        theta (ndarray): Polar angles in [rad] of each of the spectra.
+        velax (ndarray): Velocity axis in [m/s] of the spectra.
+        remove_empty (optional[bool]): Remove empty spectra.
+        sort_spectra (optional[bool]): Sorted the spectra into increasing
+            ``theta``.
+        suppress_warnings (optional[bool]): If ``True``, suppress all warnings.
+    """
 
-        Args:
-            spectra (ndarray): Array of shape [N, M] of spectra to shift and
-                fit, where N is the number of spectra and M is the length of
-                the velocity axis.
-            theta (ndarray): Polar angles in [rad] of each of the spectra. Note
-                that spectra.shape[0] == theta.shape[0].
-            velax (ndarray): Velocity axis in [m/s] of the spectra. Note that
-                spectra.shape[1] == velax.shape[0].
-            suppress_warnings (optional[bool]): If True, suppress all warnings.
-            remove_empty (optional[bool]): Remove empty spectra.
-            sort_spectra (optional[bool]): Sorted the spectra into increasing
-                polar angle.
-        """
+    def __init__(self, spectra, theta, velax, remove_empty=True,
+                 sort_spectra=True, suppress_warnings=True):
 
         # Suppress warnings.
         if suppress_warnings:
@@ -83,167 +79,164 @@ class annulus(object):
         if self.spectra.shape[1] != self.velax.size:
             raise ValueError("Mismatch in the spectra and velocity axis.")
 
-    # -- New Functions to derive 3D Velocity Structure -- #
+    # -- Measure the Velocity -- #
 
-    def get_vlos(self, fit_method='GP', p0=None, fit_vrad=True, resample=False,
-                 optimize=True, nwalkers=256, nburnin=100, nsteps=50,
-                 scatter=1e-3, optimize_kwargs=None, plot_walkers=True,
-                 plot_corner=True, return_samples=False):
-        """Infer the requested velocities by shifting lines back to a common
+    def get_vlos(self, p0=None, fit_method='GP', fit_vrad=False,
+                 resample=False, optimize=True, nwalkers=32, nburnin=500,
+                 nsteps=500, scatter=1e-3, signal='int', optimize_kwargs=None,
+                 plots=None, returns=None):
+        """
+        Infer the requested velocities by shifting lines back to a common
         center and stacking. The quality of fit is given by the selected
-        method which must be 'dV', 'GP' or 'SNR'.
+        method which must be ``'dv'``, ``'GP'`` or ``'SNR'``. The former,
+        described in `Teague et al. (2018a)`_, minimizes the line width of the
+        resulting spectrum via :func:`deprojected_width`. Similarly,
+        ``fit_method='SNR'`` aims to maximize the signal to noise of the
+        spectrum, as used in `Yen et al. (2016)`_, with specifics of the method
+        described in :func:`deprojected_nSNR`. Finally, ``fit_method='GP'``
+        uses a Gaussian Process model which relaxes the assumption of an
+        analytical line profile, as used in `Teague et al. (2018b)`_.
+
+        Different types of resampling can be applied to the spectrum. In
+        general it is recommended that ``resample=False`` for the Gaussian
+        Process approach, while ``resample=True`` for the other two.
 
         Args:
-            fit_method (str): Method used to define the quality of fit. Must be
-                either 'dV' to find the minimum linewidth (as in Teague at al.
-                2018a), 'GP' to model the emission profile as a Gaussian
-                Process (as in Teague et al. 2018b), or 'SNR' to maximize the
-                signal to noise as in Yen et al. (2018).
+            fit_method (optional[str]): Method used to define the quality of
+                fit. Must be one of ``'GP'``, ``'dV'`` or ``SNR``.
             p0 (optional[list]): Starting positions for the minimization. If
                 nothing is provided these will be guessed but this may not
                 result in very good starting positions.
             fit_vrad (bool): Include radial motion in the fit.
-            resample (Optional[bool]): Resample the shifted spectra by this
-                factor. For example, resample = 2 will shift and bin the
-                spectrum down to sampling rate twice that of the original data.
-                Not recommended for the GP approach.
-            optimize (Optional[bool]): Optimize the starting positions before
+            resample (optional[bool]): Resampling method to apply. See
+                :func:`deprojected_spectrum` for more details.
+            optimize (optional[bool]): Optimize the starting positions before
                 the MCMC runs. If an integer, the number of iterations to use
                 of optimization.
-            nwalkers (Optional[int]): Number of walkers used for the MCMC runs.
-            nburnin (Optional[int]): Number of steps used to burn in walkers.
-            nsteps (Optional[int]): Number of steps taken to sample posteriors.
-            scatter (Optional[float]): Scatter applied to the starting
+            nwalkers (optional[int]): Number of walkers used for the MCMC runs.
+            nburnin (optional[int]): Number of steps used to burn in walkers.
+            nsteps (optional[int]): Number of steps taken to sample posteriors.
+            scatter (optional[float]): Scatter applied to the starting
                 positions before running the MCMC.
-            plot_walkers (Optional[bool]): Plot the trace of the walkers.
-            plot_corner (Optional[bool]): Plot the covariances of the
-                posteriors using corner.py.
-            return_samples (Optional[bool]): If True, return the samples of the
-                posterior disitrbutions rather than the [16, 50, 84]
-                percentiles.
+            plots (optional[list]):
+            returns (optional[list]):
+
         Returns:
-            res: The results of the optimization, depending on the method
-                chosen and the various parameters.
+            Either the samples od the posterior for each free parameter, or the
+            16th, 50th and 84th pecentiles of the distributions depending on
+            what ``returns`` was set to.
+
+        .. _Teague et al. (2018a): https://ui.adsabs.harvard.edu/abs/2018ApJ...860L..12T/abstract
+        .. _Teague et al. (2018b): https://ui.adsabs.harvard.edu/abs/2018ApJ...868..113T/abstract
+        .. _Yen et al. (2016): https://ui.adsabs.harvard.edu/abs/2016ApJ...832..204Y/abstract
+
         """
 
         # Check the input variables.
         fit_method = fit_method.lower()
         if fit_method not in ['dv', 'gp', 'snr']:
             raise ValueError("method must be 'dV', 'GP' or 'SNR'.")
-        if fit_method == 'gp' and resample:
-            print("WARNING: Resampling with the GP method is not advised.")
         if fit_method == 'gp' and not celerite_installed:
             raise ImportError("Must install 'celerite' to use GP method.")
-        if optimize_kwargs is None:
-            optimize_kwargs = dict()
 
-        # Guess the starting positions if not provided.
-        if p0 is None:
-            if fit_method == 'gp':
-                p0 = self.guess_parameters_GP(fit=True)
-                if not fit_vrad:
-                    p0 = np.concatenate([p0[:1], p0[-3:]])
-            else:
-                p0 = self.guess_parameters(fit=True)[:2]
-                if not fit_vrad:
-                    p0 = p0[:1]
-        else:
-            p0 = np.squeeze(p0)
-
-        # Check the starting positions are the correct lenght.
-        if fit_vrad:
-            if fit_method == 'gp':
-                if len(p0) != 5:
-                    raise ValueError("Expecting 5 starting positions, but "
-                                     "found %d." % len(p0))
-            else:
-                if len(p0) != 2:
-                    raise ValueError("Expecting 2 starting positions, but "
-                                     "found %d." % len(p0))
-        else:
-            if fit_method == 'gp':
-                if len(p0) != 4:
-                    raise ValueError("Expecting 4 starting positions, but "
-                                     "found %d." % len(p0))
-            else:
-                if len(p0) != 1:
-                    raise ValueError("Expecting 1 starting position, but "
-                                     "found %d." % len(p0))
-
-        # For the GP method, optimize the starting positions.
+        # Run the appropriate methods.
         if fit_method == 'gp':
-            if optimize:
-                p0 = self._optimize_p0(p0, N=int(optimize),
-                                       resample=resample,
-                                       **optimize_kwargs)
-            p0 = annulus._randomize_p0(p0, nwalkers, scatter)
+            if resample:
+                print("WARNING: Resampling with the GP method is not advised.")
+            return self._fitting_GP(p0=p0, fit_vrad=fit_vrad,
+                                    nwalkers=nwalkers, nsteps=nsteps,
+                                    nburnin=nburnin, scatter=scatter,
+                                    plots=plots, returns=returns,
+                                    resample=resample,
+                                    optimize_kwargs=optimize_kwargs)
+
+        elif fit_method == 'dv':
+            return self._fitting_dV(p0=p0, fit_vrad=fit_vrad,
+                                    resample=resample,
+                                    optimize_kwargs=optimize_kwargs)
+
+        elif fit_method == 'snr':
+            return self._fitting_SNR(p0=p0, fit_vrad=fit_vrad,
+                                     resample=resample, signal=signal,
+                                     optimize_kwargs=optimize_kwargs)
+
+    # -- Gaussian Processes Approach -- #
+
+    def _fitting_GP(self, p0=None, fit_vrad=False, optimize=False, nwalkers=64,
+                    nburnin=50, nsteps=100, resample=False, scatter=1e-3,
+                    plots=None, returns=None, optimize_kwargs=None):
+        """
+        Wrapper for the GP fitting.
+
+        Args:
+            p0 (optional[list]): Starting positions.
+            optimize (optional[bool]): Run an optimization step prior to the
+                MCMC.
+            nwalkers (optional[int]): Number of walkers for the MCMC.
+            nburnin (optional[int]): Number of steps to discard for burn-in.
+            nsteps (optional[int]): Number of steps used to sample the
+                posterior distributions.
+            resample (optional): Type of resampling to be implemented.
+            scatter (optional[float]): Scatter of walkers around ``p0``.
+            plots (optional[list]): List of diagnostic plots to make. Can be
+                ``'walkers'``, ``'corner'`` or ``'none'``.
+            returns (optional[list]) List of values to return. Can be
+                ``'samples'``, ``'percentiles'`` or ``'none'``.
+
+        Returns:
+            Dependent on what is specified in ``returns``.
+        """
+
+        # Starting positions.
+        if p0 is None:
+            p0 = self._guess_parameters_GP(fit=True)
+            if not fit_vrad:
+                p0 = np.concatenate([p0[:1], p0[-3:]])
+        p0 = np.atleast_1d(p0)
 
         # Check for NaNs in the starting values.
         if np.any(np.isnan(p0)):
             raise ValueError("WARNING: NaNs in the p0 array.")
 
-        # Run the fitting.
-        if fit_method == 'gp':
-            res = self._fitting_GP(p0=p0, nwalkers=nwalkers, nsteps=nsteps,
-                                   nburnin=nburnin, plot_walkers=plot_walkers,
-                                   plot_corner=plot_corner, resample=resample,
-                                   return_samples=return_samples)
-        elif fit_method == 'dv':
-            res = self._fitting_dV(p0=p0, fit_vrad=fit_vrad, resample=resample,
-                                   **optimize_kwargs)
-        else:
-            raise NotImplementedError("Not yet.")
-        return res
-
-    def _fitting_GP(self, p0, nwalkers=64, nsteps=100, nburnin=50,
-                    plot_walkers=True, plot_corner=True, resample=False,
-                    return_samples=False):
-        """Wrapper for the GP fitting."""
-        import emcee
+        # Optimize the starting positions.
+        if optimize:
+            if optimize_kwargs is None:
+                optimize_kwargs = {}
+            p0 = self._optimize_p0_GP(p0, N=int(optimize), resample=resample,
+                                      **optimize_kwargs)
+        p0 = annulus._randomize_p0(p0, nwalkers, scatter)
 
         # Run the sampler
+        import emcee
         sampler = emcee.EnsembleSampler(nwalkers, p0.shape[1],
                                         self._lnprobability,
                                         args=(p0[:, 0].mean(), resample))
-        sampler.run_mcmc(p0, nburnin + nsteps)
+        sampler.run_mcmc(p0, nburnin + nsteps, progress=True)
         samples = sampler.chain[:, -nsteps:]
         samples = samples.reshape(-1, samples.shape[-1])
 
         # Diagnosis plots if appropriate.
-        if plot_walkers:
+        plots = ['walkers', 'corner'] if plots is None else plots
+        plots = [p.lower() for p in np.atleast_1d(plots)]
+        if 'walkers' in plots:
             annulus._plot_walkers(sampler, nburnin)
-        if plot_corner:
+        if 'corner' in plots:
             annulus._plot_corner(samples)
 
-        # Return the perncetiles.
-        if return_samples:
-            return samples
-        return np.percentile(samples, [16, 50, 84], axis=0).T
+        # Return the requested values.
+        returns = ['percentiles'] if returns is None else returns
+        returns = [r.lower() for r in np.atleast_1d(returns)]
+        if 'none' in returns:
+            return None
+        if 'percentiles' in returns:
+            idx = returns.index('percentiles')
+            returns[idx] = np.percentile(samples, [16, 50, 84], axis=0).T
+        if 'samples' in returns:
+            idx = returns.index('samples')
+            returns[idx] = samples
+        return returns[0] if len(returns) == 1 else returns
 
-    def _fitting_dV(self, p0, fit_vrad=False, resample=False, **kwargs):
-        """Wrapper for the dV fitting."""
-
-        # Define the bounds.
-        bounds = [[0.7 * p0[0], 1.3 * p0[0]]]
-        if fit_vrad:
-            bounds += [[-0.3 * p0[0], 0.3 * p0[0]]]
-        bounds = np.array(bounds)
-
-        # Populate the kwargs.
-        kwargs['method'] = kwargs.get('method', 'L-BFGS-B')
-        options = kwargs.pop('options', {})
-        kwargs['options'] = {'maxiter': options.pop('maxiter', 100000),
-                             'maxfun': options.pop('maxfun', 100000),
-                             'ftol': options.pop('ftol', 1e-4)}
-        for key in options.keys():
-            kwargs['options'][key] = options[key]
-
-        # Run the minimization.
-        res = minimize(self.get_deprojected_width, x0=p0, bounds=bounds,
-                       args=(fit_vrad, resample), **kwargs)
-        return res.x if res.success else np.nan
-
-    def _optimize_p0(self, p0, N=1, resample=True, **kwargs):
+    def _optimize_p0_GP(self, p0, N=1, resample=True, **kwargs):
         """
         Optimize the starting positions, p0. We do this in a slightly hacky way
         because the minimum is not easily found. We first optimize the hyper
@@ -270,7 +263,6 @@ class annulus(object):
             p0 (ndarray): Optimized array. If scipy.minimize does not converge
                 then p0 will not be updated. No warnings are given, however.
         """
-        verbose = kwargs.pop('verbose', False)
 
         # Default parameters for the minimization.
         # Bit messy to preserve user chosen values.
@@ -325,7 +317,7 @@ class annulus(object):
                     if verbose:
                         print('Failed vrot mimization: %s' % res.message)
 
-            # Optimize vrad holdinf the hyper-parameters and vrot constant.
+            # Optimize vrad holding the hyper-parameters and vrot constant.
             if fit_vrad:
                 res = minimize(self._nlnL_vrad, x0=p0[1],
                                args=(p0[0], p0[-3:], resample),
@@ -356,7 +348,7 @@ class annulus(object):
 
         return p0
 
-    def guess_parameters_GP(self, fit=True):
+    def _guess_parameters_GP(self, fit=True):
         """Guess the starting positions from the spectra."""
         vrot, vrad, _ = self.guess_parameters(fit=fit)
         noise = int(min(10, self.spectra.shape[1] / 3.0))
@@ -408,11 +400,6 @@ class annulus(object):
             return None
         return gp
 
-    def get_masked_spectrum(self, x, y):
-        """Return the masked spectrum for fitting."""
-        mask = np.logical_and(x >= self.velax_mask[0], x <= self.velax_mask[1])
-        return x[mask], y[mask]
-
     @staticmethod
     def _lnprior(theta, vref):
         """Uninformative log-prior function for MCMC."""
@@ -448,7 +435,7 @@ class annulus(object):
         # Deproject the data and resample if requested.
         x, y = self.deprojected_spectrum(vrot=vrot, vrad=vrad,
                                          resample=resample)
-        x, y = self.get_masked_spectrum(x, y)
+        x, y = self._get_masked_spectrum(x, y)
 
         # Build the GP model and calculate the log-likelihood.
         gp = annulus._build_kernel(x, y, hyperparams)
@@ -463,11 +450,77 @@ class annulus(object):
             return -np.inf
         return self._lnlikelihood(theta, resample)
 
+    # -- Minimizing Line Width Approach -- #
+
+    def _fitting_dV(self, p0=None, fit_vrad=False, resample=False,
+                    optimize_kwargs=None):
+        """
+        Wrapper for the dV fitting.
+
+        Args:
+            Coming Soon.
+
+        Returns:
+            Coming Soon.
+        """
+
+        # Starting positions.
+        if p0 is None:
+            p0 = self.guess_parameters(fit=True)[:2]
+            if not fit_vrad:
+                p0 = p0[:1]
+        p0 = np.atleast_1d(p0)
+
+        # Populate the kwargs.
+        optimize_kwargs = {} if optimize_kwargs is None else optimize_kwargs
+        optimize_kwargs['method'] = optimize_kwargs.get('method', 'L-BFGS-B')
+        options = optimize_kwargs.pop('options', {})
+        options['maxiter'] = options.pop('maxiter', 10000)
+        options['maxfun'] = options.pop('maxfun', 10000)
+        options['ftol'] = options.pop('ftol', 1e-4)
+        optimize_kwargs['options'] = options
+
+        # Define the bounds.
+        bounds = [[0.7 * p0[0], 1.3 * p0[0]]]
+        if fit_vrad:
+            bounds += [[-0.3 * p0[0], 0.3 * p0[0]]]
+        optimize_kwargs['bounds'] = np.array(bounds)
+
+        # Run the minimization.
+        res = minimize(self.deprojected_width, x0=p0,
+                       args=(fit_vrad, resample),
+                       **optimize_kwargs)
+        if not res.success:
+            print("WARNING: minimize did not converge.")
+        return res.x if res.success else np.nan
+
+    def deprojected_width(self, theta, fit_vrad=False, resample=True):
+        """
+        Return the Gaussian width of the deprojected and stacked spectra.
+
+        Args:
+            theta (list): Deprojection velocities, ``(vrot[, vrad])``.
+            fit_vrad (optional[bool]): Whether ``vrad`` in is ``theta``.
+            resample (optional): How to resample the data.  See
+                :func:`deprojected_spectrum` for more details.
+
+        Returns:
+            The Doppler width of the average stacked spectrum using the
+            velocities to align the individual spectra.
+        """
+        if fit_vrad:
+            vrot, vrad = theta
+        else:
+            vrot, vrad = theta, 0.0
+        x, y = self.deprojected_spectrum(vrot, vrad, resample)
+        return annulus._get_gaussian_width(*self._get_masked_spectrum(x, y))
+
     # -- Rotation Velocity by Maximizing SNR -- #
 
-    def get_vrot_SNR(self, vref=None, resample=False, signal='int',
-                     weight_SNR=True):
-        """Infer the rotation velocity by finding the rotation velocity which,
+    def _fitting_SNR(self, p0=None, fit_vrad=False, resample=False,
+                     signal='int', optimize_kwargs=None):
+        """
+        Infer the rotation velocity by finding the rotation velocity which,
         after shifting all spectra to a common velocity, results in the
         maximum signal-to=noise ratio of the stacked profile. This is an
         implementation of the method described in Yen et al. (2016, 2018).
@@ -486,33 +539,100 @@ class annulus(object):
                 in Yen et al. (2018).
 
         Returns:
-            vrot (float): Rotation velocity which maximies the width.
+            Velocities which maximizese signal to noise of the shifted and
+            stacked spectrum.
+
+        .. _Yen et al. (2016): https://ui.adsabs.harvard.edu/abs/2016ApJ...832..204Y/abstract
+
         """
-        if signal not in ['max', 'int']:
-            raise ValueError("'signal' must be either 'max' or 'int'.")
-        vref = self.guess_parameters(fit=True)[0] if vref is None else vref
-        bounds = np.array([0.7, 1.3]) * vref
-        res = minimize_scalar(self.get_deprojected_nSNR, method='bounded',
-                              args=(resample, signal, weight_SNR),
-                              bounds=bounds)
+
+        # Make sure the signal is defined.
+        if signal not in ['max', 'int', 'weighted']:
+            raise ValueError("'signal' must be either 'max', 'int', "
+                             + "or 'weighted'.")
+
+        # Starting positions.
+        if p0 is None:
+            p0 = self.guess_parameters(fit=True)[:2]
+            if not fit_vrad:
+                p0 = p0[:1]
+        p0 = np.atleast_1d(p0)
+
+        # Populate the kwargs.
+        optimize_kwargs = {} if optimize_kwargs is None else optimize_kwargs
+        optimize_kwargs['method'] = optimize_kwargs.get('method', 'L-BFGS-B')
+        options = optimize_kwargs.pop('options', {})
+        options['maxiter'] = options.pop('maxiter', 10000)
+        options['maxfun'] = options.pop('maxfun', 10000)
+        options['ftol'] = options.pop('ftol', 1e-4)
+        optimize_kwargs['options'] = options
+
+        # Define the bounds.
+        bounds = [[0.7 * p0[0], 1.3 * p0[0]]]
+        if fit_vrad:
+            bounds += [[-0.3 * p0[0], 0.3 * p0[0]]]
+        optimize_kwargs['bounds'] = np.array(bounds)
+
+        # Run the minimization.
+        res = minimize(self.deprojected_nSNR, x0=p0,
+                       args=(fit_vrad, resample, signal),
+                       **optimize_kwargs)
+        if not res.success:
+            print("WARNING: minimize did not converge.")
         return res.x if res.success else np.nan
 
-    def get_deprojected_nSNR(self, vrot, resample=False, signal='int',
-                             weighted_SNR=True):
-        """Return the negative SNR of the deprojected spectrum."""
-        x, y = self.deprojected_spectrum(vrot, resample=resample)
+    def deprojected_nSNR(self, theta, fit_vrad=False, resample=False,
+                         signal='int'):
+        """
+        Return the negative SNR of the deprojected spectrum. There are three
+        ways to calculate the signal of the data. ``signal='max'`` will use the
+        Gaussian peak relative to the noise, ``signal='int'`` will use the
+        integrated spectrum as the signal, while ``signal='weighted'`` will
+        additionally use a Gaussian shape weighting so that noise in the line
+        wings are minimized, as in `Yen et al. (2016)`_.
+
+        .. warning::
+
+            Currently the noise is calculated based on pixels greater than
+            three line widths away from the line center. As both the line
+            center and width changes from call to call, the noise will change
+            too.
+
+        Args:
+            theta (list): Deprojection velocities, ``(vrot[, vrad])``.
+            fit_vrad (optional[bool]): Whether ``vrad`` in is ``theta``.
+            resample (optional): How to resample the data. See
+                :func:`deprojected_spectrum` for more details.
+            signal (optional[str]): Definition of SNR to use.
+
+        Returns:
+            Negative of the signal-to-noise ratio.
+        """
+        if fit_vrad:
+            vrot, vrad = theta
+        else:
+            vrot, vrad = theta, 0.0
+        x, y = self.deprojected_spectrum(vrot, vrad, resample)
         x0, dx, A = annulus._fit_gaussian(x, y)
         noise = np.std(x[(x - x0) / dx > 3.0])  # Check: noise will vary.
         if signal == 'max':
             SNR = A / noise
         else:
-            if weighted_SNR:
+            if signal == 'weighted':
                 w = annulus._gaussian(x, x0, dx, (np.sqrt(np.pi) * dx)**-1)
             else:
                 w = np.ones(x.size)
             mask = (x - x0) / dx <= 1.0
             SNR = np.trapz((y * w)[mask], x=x[mask])
         return -SNR
+
+    @staticmethod
+    def _get_gaussian_width(x, y, fill_value=1e50):
+        """Return the absolute width of a Gaussian fit to the spectrum."""
+        dV = annulus._fit_gaussian(x, y)[1]
+        if np.isfinite(dV):
+            return abs(dV)
+        return fill_value
 
     @staticmethod
     def _get_p0_gaussian(x, y):
@@ -556,31 +676,12 @@ class annulus(object):
         return popt
 
     @staticmethod
-    def _get_gaussian_width(x, y, fill_value=1e50):
-        """Return the absolute width of a Gaussian fit to the spectrum."""
-        dV = annulus._fit_gaussian(x, y)[1]
-        if np.isfinite(dV):
-            return abs(dV)
-        return fill_value
-
-    @staticmethod
     def _get_gaussian_center(x, y):
         """Return the line center from a Gaussian fit to the spectrum."""
         x0 = annulus._fit_gaussian(x, y)[0]
         if np.isfinite(x0):
             return abs(x0)
         return x[np.argmax(y)]
-
-    def get_deprojected_width(self, theta, fit_vrad=False, resample=True):
-        """Return the spectrum from a Gaussian fit."""
-        if fit_vrad:
-            vrot, vrad = theta
-        else:
-            vrot, vrad = theta, 0.0
-        x, y = self.deprojected_spectrum(vrot=vrot, vrad=vrad,
-                                         resample=resample)
-        x, y = self.get_masked_spectrum(x, y)
-        return annulus._get_gaussian_width(x, y)
 
     # -- Line Profile Functions -- #
 
@@ -613,26 +714,68 @@ class annulus(object):
     # -- Deprojection Functions -- #
 
     def calc_vlos(self, vrot, vrad=0.0):
-        """Calculate the line of sight velocity for each spectrum."""
+        """
+        Calculate the line of sight velocity for each spectrum given the
+        rotational and radial velocities at the attached polar angles.
+
+        Args:
+            vrot (float): Projected rotation velocity in [m/s].
+            vrad (optional[float]): Projected radial velocity in [m/s].
+
+        Returns
+            Array of projected line of sight velocities at each polar angle.
+        """
         _vrot = vrot * np.cos(self.theta)
         _vrad = vrad * np.sin(self.theta)
         return _vrot + _vrad
 
-    def deprojected_spectra(self, vlos):
+    def _deprojected_spectra(self, vrot, vrad=0.0):
         """Returns all deprojected points as an ensemble."""
+        vlos = self.calc_vlos(vrot=vrot, vrad=vrad)
         return np.array([np.interp(self.velax, self.velax - dv, spectra)
                          for dv, spectra in zip(vlos, self.spectra)])
 
     def deprojected_spectrum(self, vrot, vrad=0.0, resample=False,
                              scatter=False):
-        """Returns (x, y) of collapsed deprojected spectrum."""
+        """
+        Returns ``(x, y[, dy])`` of the collapsed and deprojected spectrum
+        using the provided velocities to deproject the data. Different methods
+        to resample the data can be applied.
+
+            ``reasmple=False`` - returns the unbinned, shifted pixels.
+
+            ``resample=True`` - shifted pixels are binned onto the
+            attached velocity axis.
+
+            ``resample=int(N)`` - shifted pixels are binned onto a velocity
+            axis which is a factor of N times coarser than the attached
+            velocity axis. ``N=1`` is the same as ``resample=True``.
+
+            ``resample=float(N)`` - shifted pixels are binned onto a velocity
+            axis with a spacing of N [m/s]. If the velocity spacing is too fine
+            this may result in empty bins and thus NaNs in the spectrum.
+
+        It is important to disgintuish between ``float`` and ``int`` arguments
+        for ``resample``.
+
+        Args:
+            vrot (float): Rotational velocity in [m/s].
+            vrad (optional[float]): Radial velocity in [m/s].
+            resample (optional): Type of resampling to be applied.
+            scatter (optional[bool]): If the spectrum is resampled, whether to
+                return the scatter in each velocity bin.
+
+        Returns:
+            A deprojected spectrum, resampled using the provided method.
+
+        """
         vlos = self.calc_vlos(vrot=vrot, vrad=vrad)
         vpnts = self.velax[None, :] - vlos[:, None]
         vpnts, spnts = self._order_spectra(vpnts=vpnts.flatten())
         return self._resample_spectra(vpnts, spnts, resample=resample,
                                       scatter=scatter)
 
-    def line_centroids(self, method='max', spectra=None, velax=None):
+    def _line_centroids(self, method='max', spectra=None, velax=None):
         """
         Return the velocities of the peak pixels.
 
@@ -720,6 +863,11 @@ class annulus(object):
         dy, _, _ = binned_statistic(vpnts, spnts, statistic='std', bins=bins)
         return x, y, dy
 
+    def _get_masked_spectrum(self, x, y):
+        """Return the masked spectrum for fitting."""
+        mask = np.logical_and(x >= self.velax_mask[0], x <= self.velax_mask[1])
+        return x[mask], y[mask]
+
     def guess_parameters(self, method='quadratic', fit=True):
         """
         Guess the starting positions by fitting the SHO equation to the line
@@ -729,15 +877,14 @@ class annulus(object):
         Args:
             method (optional[str]): Method used to measure the velocities of
                 the line peaks. Must be in ['max', 'quadradtic', 'gaussian'].
-            fit (optional[bool]): Use scipy.curve_fit to fit the line peaks as
-                a function of velocity.
+            fit (optional[bool]): Use ``scipy.curve_fit`` to fit the line peaks
+                as a function of velocity.
 
         Returns:
-            vrot (float): Projected rotation velocity [m/s].
-            vrad (float): Projected radial velocity [m/s].
-            vlsr (float): Projected systemtic velocity [m/s].
+            The rotational, radial and systemic velocities all in [m/s].
+
         """
-        vpeaks = self.line_centroids(method=method)
+        vpeaks = self._line_centroids(method=method)
         vlsr = np.mean(vpeaks)
 
         vrot = vpeaks[abs(self.theta).argmin()]
@@ -808,13 +955,12 @@ class annulus(object):
                 the residuals.
 
         Returns:
-            ax: The fugure axes instance.
-            cb: The colorbar instance
+            Matplotlib figure.
         """
         if vrot is None:
             toplot = self.spectra
         else:
-            toplot = self.deprojected_spectra(self.calc_vlos(vrot, vrad))
+            toplot = self._deprojected_spectra(self.calc_vlos(vrot, vrad))
         vgrid, tgrid, sgrid = self._grid_river(spnts=toplot,
                                                tgrid=tgrid,
                                                vgrid=vgrid)
@@ -825,7 +971,8 @@ class annulus(object):
             scatter = np.nanstd(sgrid, axis=0)
             sgrid -= np.nanmean(sgrid, axis=0)[None, :]
 
-        ax = annulus._make_axes(ax)
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots()
 
         if imshow:
             vmin = kwargs.pop('vmin', 0 if normalize else None)
@@ -842,7 +989,7 @@ class annulus(object):
                        np.arange(3, 300, 3), colors='k', linewidths=1.0)
 
         if plot_max:
-            vmax = self.line_centroids(method=method,
+            vmax = self._line_centroids(method=method,
                                        spectra=sgrid, velax=vgrid)
             ax.errorbar(vmax, self.theta, color='k', fmt='o', mew=0.0, ms=2)
 
@@ -857,19 +1004,31 @@ class annulus(object):
 
         ax.set_xlabel(r'${\rm Velocity \quad (m\,s^{-1})}$')
         ax.set_ylabel(r'${\rm Polar \,\, Angle \quad (rad)}$')
-        return ax, cb
+        return fig
 
     # -- Plotting Functions -- #
 
-    def plot_spectra(self, ax=None):
-        """Plot all the spectra."""
-        ax = annulus._make_axes(ax)
+    def plot_spectra(self, ax=None, return_fig=False):
+        """
+        Plot the attached spectra on the same velocity axis.
+
+        Args:
+            ax (optional): Matplotlib axis onto which the data will be plotted.
+            return_fig (optional[bool]): Return the figure.
+
+        Returns
+            Figure with the attached spectra plotted.
+        """
+        import matplotlib.pyplot as plt
+        if ax is None:
+            fig, ax = plt.subplots()
         for spectrum in self.spectra:
             ax.step(self.velax, spectrum, where='mid', color='k')
         ax.set_xlabel('Velocity')
         ax.set_ylabel('Intensity')
         ax.set_xlim(self.velax[0], self.velax[-1])
-        return ax
+        if return_fig:
+            return fig
 
     @staticmethod
     def _make_axes(ax=None):
