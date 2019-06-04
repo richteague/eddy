@@ -54,6 +54,28 @@ Support
 If you are having issues, please open a `issue`_ on the GitHub page.
 
 
+Attribution
+-----------
+
+If you use `eddy` in any of your work, please cite the `JOSS article`_,
+
+::
+
+    @article{eddy,
+        doi = {10.21105/joss.01220},
+        url = {https://doi.org/10.21105/joss.01220},
+        year = {2019},
+        month = {feb},
+        publisher = {The Open Journal},
+        volume = {4},
+        number = {34},
+        pages = {1220},
+        author = {Richard Teague},
+        title = {eddy},
+        journal = {The Journal of Open Source Software}
+    }
+
+
 License
 -------
 
@@ -63,3 +85,4 @@ The project is licensed under the `MIT license`_.
 .. _emcee: https://github.com/dfm/emcee
 .. _issue: https://github.com/richteague/eddy/issues
 .. _MIT license: https://github.com/richteague/eddy/blob/master/LICENSE.md
+.. _JOSS article: http://joss.theoj.org/papers/10.21105/joss.01220
