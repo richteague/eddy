@@ -205,7 +205,7 @@ class rotationmap:
 
         # Set up and run the MCMC with emcee.
         time.sleep(0.5)
-        nwalkers = 2 * ndim if nwalkers is None else nwalkers
+        nwalkers = 2 * p0.size if nwalkers is None else nwalkers
         emcee_kwargs = {} if emcee_kwargs is None else emcee_kwargs
         emcee_kwargs['scatter'], emcee_kwargs['pool'] = scatter, pool
         for n in range(int(niter)):
@@ -700,6 +700,9 @@ class rotationmap:
         zvals = coords[2] * sc.au * dist
         vkep = sc.G * mstar * self.msun * np.power(rvals, 2.0)
         vkep = np.sqrt(vkep * np.power(np.hypot(rvals, zvals), -3.0))
+
+        # Include a radially changing inclination to account for the warp.
+        inc += w_i * np.exp(-0.5 * coords[0]**2 * w_r**-2)
         return vkep * np.sin(np.radians(inc)) * np.cos(coords[1]) + vlsr
 
     def _make_model(self, params):
