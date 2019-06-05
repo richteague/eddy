@@ -493,9 +493,9 @@ class rotationmap:
         self.set_prior('psi', [0., 5.], 'flat')
         self.set_prior('z1', [-5., 5.], 'flat')
         self.set_prior('phi', [0., 5.], 'flat')
-        self.set_prior('w_i', [0., 90.], 'flat')
-        self.set_prior('w_r', [self.dpix, 1.14 * self.xaxis.max()], 'flat')
-        self.set_prior('w_t', [-180., 180.], 'flat')
+        self.set_prior('w_i', [-90., 90.], 'flat')
+        self.set_prior('w_r', [self.dpix, 10.0], 'flat')
+        self.set_prior('w_t', [-90., 90.], 'flat')
 
     def _ln_prior(self, params):
         """Log-priors."""
