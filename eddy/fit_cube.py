@@ -999,7 +999,7 @@ class rotationmap:
         ax = plt.subplots()[1]
         vres = self.data * 1e3 - self._make_model(params)
         levels = np.where(self.ivar != 0.0, vres, np.nan)
-        levels = np.nanpercentile(levels, [10, 90])
+        levels = np.nanpercentile(levels, [2, 98])
         levels = np.linspace(levels[0], levels[1], 30)
         im = ax.contourf(self.xaxis, self.yaxis, vres, levels,
                          cmap=cm.RdBu_r, extend='both')
