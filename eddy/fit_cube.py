@@ -262,6 +262,8 @@ class rotationmap:
         to_return = []
         if 'samples' in returns:
             to_return += [samples]
+        if 'lnprob' in returns:
+            to_return += [sampler.lnprobability[nburnin:]]
         if 'percentiles' in returns:
             to_return += [np.percentile(samples, [16, 60, 84], axis=0)]
         if 'dict' in returns:
