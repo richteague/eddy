@@ -262,11 +262,13 @@ class rotationmap:
         to_return = []
         if 'samples' in returns:
             to_return += [samples]
+        if 'lnprob' in returns:
+            to_return += [sampler.lnprobability[nburnin:]]
         if 'percentiles' in returns:
             to_return += [np.percentile(samples, [16, 60, 84], axis=0)]
         if 'dict' in returns:
             to_return += [medians]
-        return to_return
+        return to_return if len(to_return) > 1 else to_return[0]
 
     def set_prior(self, param, args, type='flat'):
         """
@@ -284,7 +286,7 @@ class rotationmap:
             raise ValueError("type must be 'flat' or 'gaussian'.")
         if type == 'flat':
             def prior(p):
-                if not args[0] <= p <= args[1]:
+                if not min(args) <= p <= max(args):
                     return -np.inf
                 return np.log(1.0 / (args[1] - args[0]))
         else:
@@ -324,6 +326,7 @@ class rotationmap:
 
         .. WARNING::
 
+            The use of warps is largely untested. Use with caution!
             If you are using a warp, increase the number of iterations
             for the inference through ``self.disk_coords_niter`` (by default at
             5). For high inclinations, also set ``shadowed=True``.
@@ -346,7 +349,7 @@ class rotationmap:
             w_r (optional[float]): Scale radius of the warp in [arcsec].
             w_t (optional[float]): Angle of nodes of the warp in [degrees].
             frame (optional[str]): Frame of reference for the returned
-                coordinates. Either ``'polar'`` or ``'cylindrical'``.
+                coordinates. Either ``'cartesian'`` or ``'cylindrical'``.
             shadowed (optional[bool]): If true, use a more robust, however
                 slower deprojection routine which accurately takes into account
                 shadowing at high inclinations.
@@ -362,8 +365,8 @@ class rotationmap:
         # Check the input variables.
 
         frame = frame.lower()
-        if frame not in ['cylindrical', 'polar']:
-            raise ValueError("frame must be 'cartesian' or 'polar'.")
+        if frame not in ['cylindrical', 'cartesian']:
+            raise ValueError("frame must be 'cartesian' or 'cartesian'.")
 
         # Define the emission surface, z_func, and the warp function, w_func.
 
