@@ -9,6 +9,7 @@ The main functions of interest are:
         the disk dynamical mass (at least over the provided radial range).
 """
 
+import time
 import emcee
 import numpy as np
 import scipy.constants as sc
@@ -80,7 +81,7 @@ class profile(object):
             n(r) = (r / 100au)^(gamma)
 
         with the inclusion of Gaussian perturbations, each parameterised by a
-        center, width and depth, (r_i, dr_i, dn_i).
+        center, width and depth, (r_i, dr_i, log(dn_i)).
 
         It is additionally possible to include (an approximate) self-gravity
         term. which again is described by,
@@ -89,6 +90,9 @@ class profile(object):
 
         and the sig_0 term describes the disk mass contained between the inner
         and outer radial points.
+
+        .. warning::
+            This has not been thoroughly tested.
 
         Args:
             p0 (list): Starting positions for the walkers.
@@ -122,10 +126,23 @@ class profile(object):
         ndim = 1 + self._fit_gamma + self._fit_mdisk + 3 * self._fit_perts
         assert p0.size == ndim, "Incorrect number of starting positions."
 
-        # Cycle through this some times to converge.
-        if niter is None:
-            niter = self._fit_perts + 1
+        # Print out the assumed variables to fit.
+        labels = self._get_labels()
+
+        # Number of iterations is equal to the number of perturbations.
+        niter = self._fit_perts + 1 if niter is None else niter
         niter = max(1, int(niter))
+
+        # Print out messages.
+        print("Assuming:\n\tp0 = [%s].\n" % (',\n\t      '.join(labels)))
+        print("Running {:d} iteration(s), each with ".format(niter)
+              + "{:d} walkers and ".format(nwalkers)
+              + "{:d} steps, of which ".format(nburnin + nsteps)
+              + "{:d} are for burn-in.".format(nburnin))
+        if self._fit_perts:
+            print("The model of n_mol will include "
+                  + "{:d} Gaussian perturbations.".format(self._fit_perts))
+        time.sleep(1.0)
 
         # Sample the posteriors.
         emcee_kwargs = {} if emcee_kwargs is None else emcee_kwargs
@@ -137,13 +154,13 @@ class profile(object):
             p0 = np.median(samples, axis=0)
 
         # Diagnostic plots.
-        labels = self._get_labels()
         self.plot_walkers(sampler.chain.T, nburnin=nburnin,
                           labels=labels)
         v_mod = self.calc_v_phi(theta=p0)
         self.plot_v_phi(v_mod=v_mod, return_fig=True)
 
         # Reset the fitting values before returning samples.
+        # TODO: Must be a more efficient way of doing this.
         self.set_default_priors()
         self._smoothprs = False
         self._fit_gamma = False
@@ -204,11 +221,11 @@ class profile(object):
     def set_default_priors(self):
         """Set the default priors."""
         self.set_prior('mstar', [0., 10.], 'flat')
-        self.set_prior('gamma', [-100., 0.], 'flat')
+        self.set_prior('gamma', [-20., 0.], 'flat')
         self.set_prior('mdisk', [0., 0.1], 'flat')
-        self.set_prior('r', [0.0, 500.], 'flat')
+        self.set_prior('r', [0.0, self.rvals.max()], 'flat')
         self.set_prior('dr', [np.diff(self.rvals).mean(), 500.], 'flat')
-        self.set_prior('dn', [1.0, 1.0], 'flat')
+        self.set_prior('log_dn', [-3.0, 3.0], 'flat')
 
     def set_prior(self, param, args, type='flat'):
         """Set the prior for the given parameter."""
@@ -236,7 +253,7 @@ class profile(object):
             r, dr, dn = perts[n*3:(n+1)*3]
             lnp += profile.priors['r'](r)
             lnp += profile.priors['dr'](dr)
-            lnp += profile.priors['dn'](dn)
+            lnp += profile.priors['log_dn'](dn)
         return lnp
 
     # -- Velocity Functions -- #
@@ -331,7 +348,7 @@ class profile(object):
             for i in range(self._fit_perts):
                 dp *= self.perturbation(perts[3*i],
                                         perts[3*i+1],
-                                        perts[3*i+2])
+                                        10**perts[3*i+2])
         return dp
 
     # -- Miscellaneous Functions -- #
@@ -384,7 +401,7 @@ class profile(object):
         for i in range(self._fit_perts):
             labels += [r'${\rm r_{%d} \,\, (au)}$' % i,
                        r'${\rm \Delta r_{%d} \,\, (au)}$' % i,
-                       r'${\rm \delta n_{%d}}$' % i]
+                       r'${\rm log(\delta n_{%d})}$' % i]
         return labels
 
     def plot_v_phi(self, v_mod=None, plot_residual=True, return_fig=False):
@@ -403,13 +420,14 @@ class profile(object):
         import matplotlib.pyplot as plt
         from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
+        # Basic plot.
         fig, ax = plt.subplots(figsize=(5.5, 3.0))
-
-        ax.errorbar(self.rvals, self.v_phi, self.dvphi, color='k', fmt=' ')
+        ax.errorbar(self.rvals, self.v_phi, self.dvphi, color='k', fmt=' ',
+                    linewidth=0.8, capsize=1.0, capthick=1.0)
         ax.set_ylim(ax.get_ylim()[0], ax.get_ylim()[1])
         if v_mod is not None:
             ax.plot(self.rvals, v_mod, color='orangered')
-        ax.set_ylabel(r'${\rm V_{\phi} \,\, (m\,s^{-1})}$')
+        ax.set_ylabel(r'${\rm v_{\phi} \quad (m\,s^{-1})}$')
         ax.set_xlim(self.rvals[0], self.rvals[-1])
 
         # Include a residual box.
@@ -422,11 +440,104 @@ class profile(object):
             ax1.set_xlabel('Radius (au)')
             ax1.axhline(0.0, color='orangered', lw=1.0, zorder=-10)
             ax1.errorbar(self.rvals, self.v_phi - v_mod, self.dvphi,
-                         color='k', fmt=' ', linewidth=1.0)
+                         color='k', fmt=' ', linewidth=0.8, capsize=1.0,
+                         capthick=1.0)
+            ax1.set_ylabel(r'${\rm v_{\phi} - v_{\rm mod} \quad (m\,s^{-1})}$')
         else:
             ax.set_xlabel('Radius (au)')
         if return_fig:
             return fig
+
+    def plot_zvals(self, annotations=False, return_fig=False):
+        """
+        Plot the attached height profile.
+
+        Args:
+            annotations (Optional[bool]): If ``True``, plot lines of constant
+                z/r.
+            return_fit (Optional[bool]): If ``True``, return the figure.
+        """
+
+        # Imports.
+        import matplotlib.pyplot as plt
+
+        # Basic plot.
+        fig, ax = plt.subplots()
+        ax.plot(self.rvals, self.zvals, color='k', lw=1.0)
+        if annotations:
+            for i in np.arange(0.1, 0.4, 0.1):
+                ax.plot(self.rvals, i * self.rvals, color='k', ls=':', lw=1.0,
+                        zorder=-10)
+        if return_fig:
+            return fig
+
+    def plot_n_mol(self, samples, N=50, log_axes=True, percentiles=False,
+                   perturbations_only=False, return_samples=False):
+        """
+        Plot the molecular number density including perturbations.
+
+        Args:
+            samples (ndarray): Samples of the posterior distributions for which
+                has shape ``[nsamples, ndim]``.
+            N (Optional[int]): Number of random samples to draw.
+            log_axes (Optional[bool]): If ``True``, plot logarithmic y-axis.
+            percentiles (Optional[bool]): If ``True``, take the 16th, 50th and
+                84th percentiles of the ``n_mol`` samples to estimate the
+                uncertainty.
+            perturbations_only (Optional[bool]): If ``True``, only plot the
+                perturbations rather than the full radial profile.
+            return_samples (Optional[bool]): If ``True``, return the ``n_mol``
+                plotted samples.
+
+        Returns:
+            n_mol (ndarray): Array of the ``n_mol`` values with ``[y, dy, dy]``
+                values based on the 16th, 50th and 84th percentiles of the
+                ``N`` random samples.
+        """
+
+        # Imports.
+        import matplotlib.pyplot as plt
+
+        # Infer which of the parameters are given.
+        nparams = samples.shape[1] % 3
+        nparams = 3 if nparams == 0 else nparams
+        if nparams == 1:
+            gamma = np.ones(samples.shape[0]) * -1.0
+        else:
+            gamma = samples[:, 1]
+        perts = samples[:, nparams:]
+
+        # Draw samples.
+        self._fit_perts = int(np.floor(perts.shape[1] / 3))
+        n_mol = []
+        for i in np.random.randint(0, samples.shape[0], N):
+            n_tmp = self._calc_n_mol(gamma[i], perts[i])
+            if perturbations_only:
+                n_tmp /= self._calc_n_mol(gamma[i], None)
+            n_mol += [n_tmp]
+        if percentiles:
+            n_mol = np.percentile(n_mol, [16, 50, 84], axis=0)
+            n_mol = np.array([n_mol[1], n_mol[1]-n_mol[0], n_mol[2]-n_mol[1]])
+        else:
+            n_mol = np.array(n_mol)
+        self._fit_perts = False
+
+        # Plot the figure.
+        fig, ax = plt.subplots()
+        if percentiles:
+            ax.errorbar(self.rvals, n_mol[0], n_mol[1:], color='k', lw=0.8,
+                        capsize=1.0, capthick=1.0, fmt=' ')
+        else:
+            ax.plot(self.rvals, n_mol.T, color='k', lw=1.0, alpha=float(5/N))
+        if log_axes:
+            ax.set_yscale('log')
+        ax.set_xlabel('Radius (au)')
+        if perturbations_only:
+            ax.set_ylabel(r'${\rm n(H_2) \, / \, n_0(H_2)}$')
+        else:
+            ax.set_ylabel(r'${\rm n(H_2) \quad (cm^{-3})}$')
+        if return_samples:
+            return n_mol
 
     @staticmethod
     def plot_walkers(samples, nburnin=None, labels=None, return_fig=False,
@@ -470,12 +581,17 @@ class profile(object):
             ax.set_xlim(0, len(walker))
             if labels is not None:
                 ax.set_ylabel(labels[s])
+            y0 = 0.02 * (ax.get_ylim()[1] - ax.get_ylim()[0])
             if nburnin is not None:
                 ax.axvspan(0, nburnin, facecolor='w', alpha=0.75, zorder=1)
                 ax.axvline(nburnin, ls=':', color='k')
-                y0 =  0.02 * (ax.get_ylim()[1] - ax.get_ylim()[0])
                 ax.text(nburnin / 2.0, y0 + ax.get_ylim()[1], 'burn-in',
-                ha='center', va='bottom', fontsize=8)
+                        ha='center', va='bottom', fontsize=8)
+                x0 = (len(walker) - nburnin) / 2.0 + nburnin
+            else:
+                x0 = len(walker) * 0.5
+            ax.text(x0, y0 + ax.get_ylim()[1], 'sample PDF', ha='center',
+                    va='bottom', fontsize=8)
             ax.set_ylim(ax.get_ylim()[0], ax.get_ylim()[1])
 
             # Add the aide histogram if required.
@@ -496,7 +612,7 @@ class profile(object):
                 ax1.set_ylim(ax.get_ylim()[0], ax.get_ylim()[1])
                 ax1.set_xlim(0, ax1.get_xlim()[1])
 
-                # Gentrification
+                # Gentrification.
                 ax1.set_yticklabels([])
                 ax1.set_xticklabels([])
                 ax1.tick_params(which='both', left=0, bottom=0)

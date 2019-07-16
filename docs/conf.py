@@ -34,7 +34,8 @@ extensions = [
     'sphinx.ext.coverage',
     'sphinx.ext.napoleon',
     'sphinx.ext.imgmath',
-    'nbsphinx']
+    'nbsphinx',
+]
 
 # Is this really necessary...
 autodoc_mock_imports = ['astropy']
