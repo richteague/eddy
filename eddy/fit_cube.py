@@ -634,7 +634,6 @@ class rotationmap:
         # Rotate and the disk.
         x_rot, y_rot = self._rotate_coords(x_dep, y_dep, PA)
         x_rot, y_rot = x_rot + x0, y_rot + y0
-        z_rot = z_dep
 
         # Grid the disk.
         from scipy.interpolate import griddata
@@ -977,7 +976,6 @@ class rotationmap:
 
     def _plot_bestfit(self, params, ivar=None, residual=False, return_ax=False):
         """Plot the best-fit model."""
-        import matplotlib.cm as cm
         import matplotlib.pyplot as plt
         ax = plt.subplots()[1]
         vkep = self._make_model(params) * 1e-3
@@ -1070,7 +1068,7 @@ class rotationmap:
         tb = np.where(zb <= 0.0, tb, np.nan)
 
         # Flat disk for masking.
-        rr, tt, _ = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA)
+        rr, _, _ = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA)
 
         # Make sure the bounds are OK.
         r_min = 0.0 if r_min is None else r_min

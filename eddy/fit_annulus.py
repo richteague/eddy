@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import binned_statistic
 from scipy.optimize import curve_fit
-from scipy.optimize import minimize, minimize_scalar
+from scipy.optimize import minimize
 
 # Check is 'celerite' is installed.
 try:
@@ -279,7 +279,7 @@ class annulus(object):
         nlnL = self._nlnL(p0, resample=resample)
 
         # Cycle through the required number of iterations.
-        for i in range(int(N)):
+        for _ in range(int(N)):
 
             # Define the bounds.
             bounds = [(0.8 * p0[0], 1.2 * p0[0])]
@@ -982,7 +982,7 @@ class annulus(object):
                            aspect='auto', vmin=vmin, vmax=vmax, **kwargs)
         else:
             im = ax.contourf(vgrid, tgrid, sgrid, 50, **kwargs)
-        cb = plt.colorbar(im, pad=0.02)
+        plt.colorbar(im, pad=0.02)
 
         if residual and significance:
             ax.contour(vgrid, tgrid, abs(sgrid) / scatter[None, :],
@@ -1019,7 +1019,6 @@ class annulus(object):
         Returns
             Figure with the attached spectra plotted.
         """
-        import matplotlib.pyplot as plt
         if ax is None:
             fig, ax = plt.subplots()
         for spectrum in self.spectra:
