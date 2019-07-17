@@ -1238,7 +1238,7 @@ class rotationmap:
                 ax1.set_xlim(0, ax1.get_xlim()[1])
                 ax1.set_yticklabels([])
                 ax1.set_xticklabels([])
-                ax1.tick_params(which='both', left=0, bottom=0)
+                ax1.tick_params(which='both', left=0, bottom=0, top=0, right=0)
                 ax1.spines['right'].set_visible(False)
                 ax1.spines['bottom'].set_visible(False)
                 ax1.spines['top'].set_visible(False)
