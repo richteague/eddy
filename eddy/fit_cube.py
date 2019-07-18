@@ -366,7 +366,7 @@ class rotationmap:
 
         frame = frame.lower()
         if frame not in ['cylindrical', 'cartesian']:
-            raise ValueError("frame must be 'cartesian' or 'cartesian'.")
+            raise ValueError("frame must be 'cylindrical' or 'cartesian'.")
 
         # Define the emission surface, z_func, and the warp function, w_func.
 
@@ -496,7 +496,7 @@ class rotationmap:
         self.set_prior('psi', [0., 5.], 'flat')
         self.set_prior('z1', [-5., 5.], 'flat')
         self.set_prior('phi', [0., 5.], 'flat')
-        self.set_prior('w_i', [-90., 90.], 'flat')
+        self.set_prior('w_i', [0., 90.], 'flat')
         self.set_prior('w_r', [self.dpix, 10.0], 'flat')
         self.set_prior('w_t', [-90., 90.], 'flat')
 
@@ -705,7 +705,7 @@ class rotationmap:
 
         # Include a radially changing inclination to account for the warp.
         inc += w_i * np.exp(-0.5 * coords[0]**2 * w_r**-2)
-        return vkep * np.sin(np.radians(inc)) * np.cos(coords[1]) + vlsr
+        return vkep * abs(np.sin(np.radians(inc))) * np.cos(coords[1]) + vlsr
 
     def _make_model(self, params):
         """Build the Keplerian model from the dictionary of parameters."""
