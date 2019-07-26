@@ -1001,7 +1001,8 @@ class rotationmap:
         vres = self.data * 1e3 - self._make_model(params)
         levels = np.where(self.ivar != 0.0, vres, np.nan)
         levels = np.nanpercentile(levels, [2, 98])
-        levels = np.linspace(levels[0], levels[1], 30)
+        levels = max(abs(levels[0]), abs(levels[1]))
+        levels = np.linspace(-levels, levels, 30)
         im = ax.contourf(self.xaxis, self.yaxis, vres, levels,
                          cmap=cm.RdBu_r, extend='both')
         if ivar is not None:
