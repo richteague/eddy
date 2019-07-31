@@ -19,8 +19,6 @@ The only real dependencies for this are `numpy`, `scipy`, `matplotlib`, [`emcee`
 
 If things have installed correctly you should be able to run the [Jupyter Notebooks](https://github.com/richteague/eddy/tree/master/docs) with no errors. If something goes wrong, please [open an issue](https://github.com/richteague/eddy/issues/new).
 
-Something which is `pip` installable is currently work in progress.
-
 ## Useage
 
 For guides on how to use `eddy` you will find extensive examples in the [documents](https://github.com/richteague/eddy/tree/master/docs).
