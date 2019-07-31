@@ -7,8 +7,8 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 setup(
-    name="eddy",
-    version="1.1",
+    name="astro-eddy",
+    version="1.0.0",
     author="Richard Teague",
     author_email="rteague@umich.edu",
     description=("Tools to recover expectionally precise rotation curves from "
@@ -18,7 +18,13 @@ setup(
     url="https://github.com/richteague/eddy",
     packages=["eddy"],
     license="MIT",
-    install_requires=["scipy", "numpy", "matplotlib", "emcee", "corner"],
+    install_requires=[
+        "scipy>=1",
+        "numpy",
+        "matplotlib",
+        "emcee>=2",
+        "corner>=2",
+        ],
     classifiers=[
         "Programming Language :: Python :: 3.5",
         "License :: OSI Approved :: MIT License",

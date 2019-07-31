@@ -457,7 +457,10 @@ class rotationmap:
                                         self._ln_probability,
                                         args=[params, np.nan],
                                         **kwargs)
-        sampler.run_mcmc(p0, nburnin + nsteps, progress=progress)
+        if emcee.__version__ >= '3':
+            sampler.run_mcmc(p0, nburnin + nsteps, progress=progress)
+        else:
+            sampler.run_mcmc(p0, nburnin + nsteps)
         return sampler
 
     @staticmethod
