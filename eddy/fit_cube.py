@@ -124,6 +124,8 @@ class rotationmap:
         low spatial resolution data, or for rotation maps made via the
         intensity-weighted average velocity.
 
+        .. _Rosenfeld et al. (2013): https://ui.adsabs.harvard.edu/abs/2013ApJ...774...16R/abstract
+
         Args:
             p0 (list): List of the free parameters to fit.
             params (dictionary): Dictionary of the model parameters.
@@ -162,9 +164,6 @@ class rotationmap:
                 16th, 50th and 84th percentiles of each posterior functions.
                 ``'dict'`` will return a dictionary of the median parameters
                 which can be directly input to other functions.
-
-        .. _Rosenfeld et al. (2013): https://ui.adsabs.harvard.edu/abs/2013ApJ...774...16R/abstract
-
         """
 
         # Check the dictionary. May need some more work.
@@ -726,64 +725,119 @@ class rotationmap:
 
     # -- Functions to help determine the emission height. -- #
 
-    def _get_peak_pix(self, PA, inc=None, x0=None, y0=None, frame='sky',
-                      ycut=20.0):
+    def find_maxima(self, x0=0.0, y0=0.0, PA=0.0, vlsr=None, r_max=None,
+                    r_min=None, smooth=False, through_center=True):
         """
-        Get the coordinates of the peak velocities. This allows you to quickly
-        see if the disk is flared or have an idea of the emssision surface.
+        Find the node of velocity maxima along the major axis of the disk.
 
         Args:
-            PA (float): Position angle of the disk in [degrees]. This is
-            measured from North to the red-shifted major axis Eastwards.
-            inc (Optional[float]): Disk inclination in [degrees], needed to
-                deproject into true height values.
-            frame (Optional[str]): Frame for the returned coordinates. If
-                frame='sky', return x- and y-offset values. Otherwise use the
-                rotated disk coordiantes.
-            ycut (Optional[float]): Only use the `ycut` fraction of the minor
-                axis for fitting.
+            x0 (Optional[float]): Source center offset along x-axis in
+                [arcsec].
+            y0 (Optional[float]): Source center offset along y-axis in
+                [arcsec].
+            PA (Optioanl[float]): Source position angle in [deg].
+            vlsr (Optional[float]): Systemic velocity in [m/s].
+            r_max (Optional[float]): Maximum offset to consider in [arcsec].
+            r_min (Optional[float]): Minimum offset to consider in [arcsec].
+            smooth (Optional[bool/array]): Smooth the line of nodes. If
+                ``True``, smooth with the beam kernel, otherwise ``smooth`` can
+                be a user-defined kernel.
+            through_center (Optional[bool]): If ``True``, force the central
+                pixel to go through ``(0, 0)``.
 
-        Returns [if frame='sky']:
-            x (ndarray): x-positions of the peak values [arcsec].
-            y (ndarray): y-positions of the peak values [arcsec].
-
-        [if frame='disk']:
-            r (ndarray): Radial offset in [arcsec].
-            z (ndarray): Height in [arcsec].
+        Returns:
+            array, array: Arrays of ``x_sky`` and ``y_sky`` values of the
+            maxima.
         """
 
-        if frame not in ['sky', 'disk']:
-            raise ValueError("'frame' must be 'sky' or 'disk'.")
-        if frame == 'disk' and inc is None:
-            raise ValueError("Must provide disk inclination to deproject.")
+        # Default parameters.
+        vlsr = np.nanmedian(self.data) if vlsr is None else vlsr
+        r_max = 0.5 * self.xaxis.max() if r_max is None else r_max
+        r_min = 0.0 if r_min is None else r_min
 
-        mask = np.percentile(self.yaxis, [50 + ycut / 2.0])
-        mask = abs(self.yaxis)[:, None] > mask
+        # Shift and rotate the image.
+        data = self._shift_center(dx=x0, dy=y0, save=False)
+        data = self._rotate_image(PA=PA, data=data, save=False)
 
-        if x0 is not None or y0 is not None:
-            data = self.shift_center(dx0=x0, dy0=y0, save=False)
-        else:
-            data = self.data.copy()
-        x0 = 0.0 if x0 is None else x0
-        y0 = 0.0 if y0 is None else y0
+        # Find the maximum values. Apply some clipping to help.
+        mask = np.maximum(0.3 * abs(self.xaxis), self.bmaj)
+        mask = abs(self.yaxis)[:, None] > mask[None, :]
+        resi = np.where(mask, 0.0, abs(data - vlsr))
+        resi = np.take(self.yaxis, np.argmax(resi, axis=0))
 
-        data = self.rotate_image(PA, data=data, save=False)
-        data = np.where(mask, np.nan, data)
-
-        x = self.xaxis.copy()
-        ymax = np.take(self.yaxis, np.nanargmax(data, axis=0))
-        ymin = np.take(self.yaxis, np.nanargmin(data, axis=0))
-        y = np.where(x >= 0, ymax, ymin)
-
-        if frame == 'sky':
-            # TODO: Fix this mess.
-            if PA <= 180.0:
-                x, y = rotationmap._rotate_coords(x, y, 90. - PA)
+        # Gentrification.
+        if through_center:
+            resi[abs(self.xaxis).argmin()] = 0.0
+        if smooth:
+            if type(smooth) is bool:
+                kernel = np.hanning(self.bmaj / self.dpix)
             else:
-                x, y = rotationmap._rotate_coords(y, x, PA - 90.)
-            return x + x0, y + y0
-        idxs = np.argsort(abs(x))
-        return abs(x)[idxs], y[idxs] / np.sin(np.radians(inc))
+                kernel =  np.squeeze(smooth)
+            resi = np.convolve(resi, kernel / kernel.sum(), mode='same')
+        mask = np.logical_and(abs(self.xaxis) <= r_max,
+                              abs(self.xaxis) >= r_min)
+        x, y = self.xaxis[mask], resi[mask]
+
+        # Rotate back to sky-plane and return.
+        x, y = self._rotate_coords(x, -y, PA)
+        return x + x0, y + y0
+
+    def find_minima(self, x0=0.0, y0=0.0, PA=0.0, vlsr=None, r_max=None,
+                    r_min=None, smooth=False, through_center=True):
+        """
+        Find the line of nodes where v0 = v_LSR along the minor axis.
+
+        Args:
+            x0 (Optional[float]): Source center offset along x-axis in
+                [arcsec].
+            y0 (Optional[float]): Source center offset along y-axis in
+                [arcsec].
+            PA (Optioanl[float]): Source position angle in [deg].
+            vlsr (Optional[float]): Systemic velocity in [m/s].
+            r_max (Optional[float]): Maximum offset to consider in [arcsec].
+            r_min (Optional[float]): Minimum offset to consider in [arcsec].
+            smooth (Optional[bool/array]): Smooth the line of nodes. If
+                ``True``, smooth with the beam kernel, otherwise ``smooth`` can
+                be a user-defined normalized kernel.
+            through_center (Optional[bool]): If ``True``, force the central
+                pixel to go through ``(0, 0)``.
+
+        Returns:
+            array, array: Arrays of ``x_sky`` and ``y_sky`` values of the
+            velocity minima.
+        """
+
+        # Default parameters.
+        vlsr = np.nanmedian(self.data) if vlsr is None else vlsr
+        r_max = 0.5 * self.xaxis.max() if r_max is None else r_max
+        r_min = 0.0 if r_min is None else r_min
+
+        # Shift and rotate the image.
+        data = self._shift_center(dx=x0, dy=y0, save=False)
+        data = self._rotate_image(PA=PA, data=data, save=False)
+
+        # Find the maximum values. Apply some clipping to help.
+        mask = np.maximum(0.3 * abs(self.yaxis), self.bmaj)
+        mask = abs(self.xaxis)[None, :] > mask[:, None]
+        resi = np.where(mask, 1e10, abs(data - vlsr))
+        resi = np.take(-self.yaxis, np.argmin(resi, axis=1))
+
+        # Gentrification.
+        if through_center:
+            resi[abs(self.yaxis).argmin()] = 0.0
+        if smooth:
+            if type(smooth) is bool:
+                kernel = np.hanning(self.bmaj / self.dpix)
+            else:
+                kernel = np.squeeze(smooth)
+            resi = np.convolve(resi, kernel / kernel.sum(), mode='same')
+        mask = np.logical_and(abs(self.yaxis) <= r_max,
+                              abs(self.yaxis) >= r_min)
+        x, y = resi[mask], self.yaxis[mask]
+
+        # Rotate back to sky-plane and return.
+        x, y = self._rotate_coords(x, -y, PA)
+        return x + x0, y + y0
 
     def _fit_surface(self, inc, PA, x0=None, y0=None, r_min=None, r_max=None,
                      fit_z1=False, ycut=20.0, **kwargs):
@@ -1113,36 +1167,36 @@ class rotationmap:
                    linewidths=lw, linestyles='--', zorder=zo)
         return ax
 
-    def _plot_axes(self, ax, x0=0., y0=0., inc=0., PA=0., major=1.0, **kwargs):
+    def _plot_axes(self, ax, x0=0.0, y0=0.0, inc=0.0, PA=0.0, major=1.0,
+                   plot_kwargs=None):
         """
         Plot the major and minor axes on the provided axis.
 
         Args:
             ax (Matplotlib axes): Axes instance to plot onto.
-            x0 (optional[float]): Relative x-location of the center [arcsec].
-            y0 (optional[float]): Relative y-location of the center [arcsec].
-            inc (optional[float]): Inclination of the disk in [degrees].
-            PA (optional[float]): Position angle of the disk in [degrees].
-            major (optional[float]): Size of the major axis line in [arcsec].
+            x0 (Optional[float]): Relative x-location of the center [arcsec].
+            y0 (Optional[float]): Relative y-location of the center [arcsec].
+            inc (Optional[float]): Inclination of the disk in [degrees].
+            PA (Optional[float]): Position angle of the disk in [degrees].
+            major (Optional[float]): Size of the major axis line in [arcsec].
+            plot_kwargs (Optional[dict]): Dictionary of parameters to pass to
+                ``matplotlib.plot``.
+
+        Returns:
+            matplotlib axis: Matplotlib ax with axes drawn.
         """
-
-        # Default parameters plotting values.
-        ls = kwargs.pop('ls', kwargs.pop('linestyle', '--'))
-        lw = kwargs.pop('lw', kwargs.pop('linewidth', 0.5))
-        lc = kwargs.pop('c', kwargs.pop('color', 'k'))
-        zo = kwargs.pop('zorder', -2)
-
-        # Plotting.
-        PA = np.radians(PA)
-        ax.plot([major * np.cos(PA) - x0, major * np.cos(PA + np.pi) - x0],
-                [major * np.sin(PA) - y0, major * np.sin(PA + np.pi) - y0],
-                ls=ls, lw=lw, color=lc, zorder=zo)
-        minor = major * np.cos(np.radians(inc))
-        ax.plot([minor * np.cos(PA + 0.5 * np.pi) - x0,
-                 minor * np.cos(PA + 1.5 * np.pi) - x0],
-                [minor * np.sin(PA + 0.5 * np.pi) - y0,
-                 minor * np.sin(PA + 1.5 * np.pi) - y0],
-                ls=ls, lw=lw, color=lc, zorder=zo)
+        x = np.array([major, -major, 0.0, 0.0])
+        y = np.array([0.0, 0.0, major * np.cos(np.radians(inc)),
+                      -major * np.cos(np.radians(inc))])
+        x, y = self._rotate_coords(x, y, PA=PA)
+        x, y = x + x0, y + y0
+        plot_kwargs = {} if plot_kwargs is None else plot_kwargs
+        c = plot_kwargs.pop('c', plot_kwargs.pop('color', 'k'))
+        ls = plot_kwargs.pop('ls', plot_kwargs.pop('linestyle', ':'))
+        lw = plot_kwargs.pop('lw', plot_kwargs.pop('linewidth', 1.0))
+        ax.plot(x[:2], y[:2], c=c, ls=ls, lw=lw)
+        ax.plot(x[2:], y[2:], c=c, ls=ls, lw=lw)
+        return ax
 
     def _plot_maxima(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, r_max=None,
                     plot_axes_kwargs=None, scatter_kwargs=None,
@@ -1253,7 +1307,7 @@ class rotationmap:
         corner.corner(samples, labels=labels, title_fmt='.4f', bins=30,
                       quantiles=quantiles, show_titles=True)
 
-    def _plot_beam(self, ax, dx=0.125, dy=0.125, **kwargs):
+    def plot_beam(self, ax, dx=0.125, dy=0.125, **kwargs):
         """Plot the sythensized beam on the provided axes."""
         from matplotlib.patches import Ellipse
         beam = Ellipse(ax.transLimits.inverted().transform((dx, dy)),
@@ -1278,4 +1332,4 @@ class rotationmap:
         ax.set_xlabel('Offset (arcsec)')
         ax.set_ylabel('Offset (arcsec)')
         if self.bmaj is not None:
-            self._plot_beam(ax=ax)
+            self.plot_beam(ax=ax)

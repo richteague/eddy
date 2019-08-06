@@ -122,7 +122,7 @@ class annulus(object):
             returns (optional[list]):
 
         Returns:
-            Either the samples od the posterior for each free parameter, or the
+            Either the samples of the posterior for each free parameter, or the
             16th, 50th and 84th pecentiles of the distributions depending on
             what ``returns`` was set to.
 
