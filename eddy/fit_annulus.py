@@ -960,7 +960,7 @@ class annulus(object):
         if vrot is None:
             toplot = self.spectra
         else:
-            toplot = self._deprojected_spectra(self.calc_vlos(vrot, vrad))
+            toplot = self._deprojected_spectra(vrot=vrot, vrad=vrad)
         vgrid, tgrid, sgrid = self._grid_river(spnts=toplot,
                                                tgrid=tgrid,
                                                vgrid=vgrid)
