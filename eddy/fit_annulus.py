@@ -52,7 +52,7 @@ class annulus(object):
 
         # Remove empty pixels.
         if remove_empty:
-            idxa = np.sum(self.spectra, axis=-1) > 0.0
+            idxa = np.sum(self.spectra, axis=-1) != 0.0
             idxb = np.std(self.spectra, axis=-1) != 0.0
             idxs = idxa & idxb
             self.theta = self.theta[idxs]
