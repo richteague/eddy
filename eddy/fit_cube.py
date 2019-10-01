@@ -1198,9 +1198,10 @@ class rotationmap:
         ax.plot(x[2:], y[2:], c=c, ls=ls, lw=lw)
         return ax
 
-    def _plot_maxima(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, r_max=None,
-                    plot_axes_kwargs=None, scatter_kwargs=None,
-                    return_ax=False):
+    def _plot_maxima(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, vlsr=None,
+                     r_max=1.0, r_min=None, smooth=False, through_center=True,
+                     plot_axes_kwargs=None, plot_kwargs=None,
+                     return_fig=False):
         """
         Mark the position of the maximum velocity as a function of radius. This
         can help demonstrate if there is an appreciable bend in velocity
@@ -1212,47 +1213,56 @@ class rotationmap:
             y0 (Optional[float]): Source center y-offset in [arcsec].
             inc (Optional[float]): Disk inclination in [degrees].
             PA (Optional[float]): Disk position angle in [degrees].
-            r_max (Optional[float]): Maximum offset along the major axis to
-                plot in [arcsec]. This can never be larger than the span of the
-                x-axis.
+            vlsr (Optional[float]): Systemic velocity in [m/s].
+            r_max (Optional[float]): Maximum offset to consider in [arcsec].
+            r_min (Optional[float]): Minimum offset to consider in [arcsec].
+                This is useful to skip large regions where beam convolution
+                dominates the map.
+            smooth (Optional[bool/array]): Smooth the line of nodes. If
+                ``True``, smoth with the beam kernel, otherwise ``smooth`` can
+                be a user-defined kernel.
+            through_center (Optional[bool]): If ``True``, force the central
+                pixel to go through ``(0, 0)``.
             plot_axes_kwargs (Optional[dict]): Dictionary of kwargs for the
                 plot_axes function.
-            scatter_kwargs (Optional[dict]): Dictionary of kwargs for the
-                scatter plot of the maximum pixels.
-            return_ax (Optional[bool]): If True, return the axis.
+            plot_kwargs (Optional[dict]): Dictionary of kwargs for the
+                plot of the maximum and minimum pixels.
+            return_fig (Optional[bool]): If True, return the figure.
 
         Returns:
-            ax (Matplotlib axis): If return_ax is True.
+            fig (Matplotlib fig): If return_fig is ``True``. Can access the
+                axis through fig.axes[0].
         """
 
         # Background figure.
-        ax = self.plot_data(return_ax=True)
+        fig = self.plot_data(return_fig=True)
+        ax = fig.axes[0]
         if plot_axes_kwargs is None:
             plot_axes_kwargs = dict()
-        self.plot_axes(ax=ax, x0=x0, y0=y0, inc=inc, PA=PA,
-                       major=r_max if r_max is not None else 1.0,
-                       **plot_axes_kwargs)
+        self._plot_axes(ax=ax, x0=x0, y0=y0, inc=inc, PA=PA,
+                        major=r_max, **plot_axes_kwargs)
 
-        # Get the pixels.
-        x, y = self.get_peak_pix(PA=PA, inc=inc, x0=x0, y0=y0, frame='sky')
-        r = np.hypot(x, y)
-        mask = r <= r_max
-        x, y, r = x[mask], y[mask], r[mask]
+        # Get the pixels for the maximum and minimum values.
+        x_maj, y_maj = self.find_maxima(x0=x0, y0=y0, PA=PA, vlsr=vlsr,
+                                        r_max=r_max, r_min=r_min,
+                                        smooth=smooth,
+                                        through_center=through_center)
+        r_max = r_max * np.cos(np.radians(inc))
+        x_min, y_min = self.find_minima(x0=x0, y0=y0, PA=PA, vlsr=vlsr,
+                                        r_max=r_max, r_min=r_min,
+                                        smooth=smooth,
+                                        through_center=through_center)
 
-        # Scatter plot of the pixels.
-        if scatter_kwargs is None:
-            scatter_kwargs = dict()
-        cm = scatter_kwargs.pop('cmap', 'bone_r')
-        ms = scatter_kwargs.pop('s', scatter_kwargs.pop('size', 5))
-        ec = scatter_kwargs.pop('ec', scatter_kwargs.pop('edgecolor', 'k'))
-        lw = scatter_kwargs.pop('lw', scatter_kwargs.pop('linewidth', 1.25))
-        if lw != 0.0:
-            ax.scatter(x, y, c=np.hypot(x, y), s=ms, lw=lw, cmap=cm,
-                       edgecolor=ec, vmin=0.0, vmax=r.max(), **scatter_kwargs)
-        ax.scatter(x, y, c=np.hypot(x, y), s=ms, lw=0., cmap=cm, edgecolor=ec,
-                   vmin=0.0, vmax=r.max(), **scatter_kwargs)
-        if return_ax:
-            return ax
+        # Plot the lines.
+        plot_kwargs = {} if plot_kwargs is None else plot_kwargs
+        c = plot_kwargs.pop('c', plot_kwargs.pop('color', 'k'))
+        lw = plot_kwargs.pop('lw', plot_kwargs.pop('linewidth', 1.0))
+
+        ax.plot(x_maj, y_maj, c=c, lw=lw, **plot_kwargs)
+        ax.plot(x_min, y_min, c=c, lw=lw, **plot_kwargs)
+
+        if return_fig:
+            return fig
 
     @staticmethod
     def _plot_walkers(samples, nburnin=None, labels=None, histogram=True):
