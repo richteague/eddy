@@ -400,6 +400,9 @@ class rotationmap:
                 draw a solid contour around the regions with finite ``ivar``
                 values.
             return_fig (optional[bool]): Return the figure.
+        Returns:
+            fig (Matplotlib figure): If ``return_fig`` is ``True``. Can access
+                the axes through ``fig.axes`` for additional plotting.
         """
         import matplotlib.cm as cm
         import matplotlib.pyplot as plt
@@ -1198,10 +1201,9 @@ class rotationmap:
         ax.plot(x[2:], y[2:], c=c, ls=ls, lw=lw)
         return ax
 
-    def _plot_maxima(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, vlsr=None,
-                     r_max=1.0, r_min=None, smooth=False, through_center=True,
-                     plot_axes_kwargs=None, plot_kwargs=None,
-                     return_fig=False):
+    def plot_maxima(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, vlsr=None,
+                    r_max=1.0, r_min=None, smooth=False, through_center=True,
+                    plot_axes_kwargs=None, plot_kwargs=None, return_fig=False):
         """
         Mark the position of the maximum velocity as a function of radius. This
         can help demonstrate if there is an appreciable bend in velocity
@@ -1230,7 +1232,7 @@ class rotationmap:
             return_fig (Optional[bool]): If True, return the figure.
 
         Returns:
-            fig (Matplotlib fig): If return_fig is ``True``. Can access the
+            fig (Matplotlib figure): If return_fig is ``True``. Can access the
                 axis through fig.axes[0].
         """
 
