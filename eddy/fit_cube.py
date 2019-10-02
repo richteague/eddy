@@ -1232,8 +1232,9 @@ class rotationmap:
             return_fig (Optional[bool]): If True, return the figure.
 
         Returns:
-            fig (Matplotlib figure): If return_fig is ``True``. Can access the
-                axis through fig.axes[0].
+            fig: If return_fig is ``True``. Can access the axis through
+                ``fig.axes[0]``.
+            test: Another test value. Something here.
         """
 
         # Background figure.
