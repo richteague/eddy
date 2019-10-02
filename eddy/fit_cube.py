@@ -357,8 +357,11 @@ class rotationmap:
                 and ``scipy.interpolate.griddata``.
 
         Returns:
-            Either the ``(r, phi, z)`` coordinates if ``frame='cylindrical'``
-            or ``(x, y, z)`` coordinates if ``frame='cartesian'``.
+            (tuple): tuple containing:
+
+                rvals(ndarray): cylindrical radius values in [arcsec].
+                tvals(ndarray): cylindrical azimuthal values in [radians].
+                zvals(ndarray): cylindrical height values in [arcsec].
         """
 
         # Check the input variables.
@@ -1232,9 +1235,8 @@ class rotationmap:
             return_fig (Optional[bool]): If True, return the figure.
 
         Returns:
-            fig: If return_fig is ``True``. Can access the axis through
-                ``fig.axes[0]``.
-            test: Another test value. Something here.
+            (Matplotlib figure): If return_fig is ``True``. Can access the axis
+                through ``fig.axes[0]``.
         """
 
         # Background figure.
