@@ -358,9 +358,9 @@ class rotationmap:
 
         Returns:
             array, array, array: Three coordinate arrays with ``(r, phi, z)``,
-                in units of [arcsec], [radians], [arcsec], if
-                ``frame='cylindrical'`` or ``(x, y, z)``, all in units of
-                [arcsec] if ``frame='cartesian'``.
+            in units of [arcsec], [radians], [arcsec], if
+            ``frame='cylindrical'`` or ``(x, y, z)``, all in units of [arcsec]
+            if ``frame='cartesian'``.
         """
 
         # Check the input variables.
