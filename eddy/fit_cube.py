@@ -357,11 +357,10 @@ class rotationmap:
                 and ``scipy.interpolate.griddata``.
 
         Returns:
-            (tuple): tuple containing:
-
-                rvals(ndarray): cylindrical radius values in [arcsec].
-                tvals(ndarray): cylindrical azimuthal values in [radians].
-                zvals(ndarray): cylindrical height values in [arcsec].
+            array, array, array: Three coordinate arrays with ``(r, phi, z)``,
+                in units of [arcsec], [radians], [arcsec], if
+                ``frame='cylindrical'`` or ``(x, y, z)``, all in units of
+                [arcsec] if ``frame='cartesian'``.
         """
 
         # Check the input variables.
