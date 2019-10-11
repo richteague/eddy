@@ -918,93 +918,97 @@ class annulus(object):
         tpnts = (self.theta[:, None] * np.ones(self.spectra.shape)).flatten()
         sgrid = griddata((vpnts, tpnts), spnts.flatten(),
                          (vgrid[None, :], tgrid[:, None]),
-                         **kwargs)
+                         method='nearest', **kwargs)
         return vgrid, tgrid, np.where(np.isfinite(sgrid), sgrid, 0.0)
 
-    def plot_river(self, ax=None, vrot=None, vrad=0.0, tgrid=None, vgrid=None,
-                   xlims=None, ylims=None, normalize=True, plot_max=True,
-                   method='quadratic', imshow=True, residual=False,
-                   significance=True, **kwargs):
+    def plot_river(self, vrot=None, vrad=0.0, residual=False, xlims=None,
+                   ylims=None, tgrid=None, return_fig=False):
         """
         Make a river plot, showing how the spectra change around the azimuth.
         This is a nice way to search for structure within the data.
 
         Args:
-            ax (Optional[axes]): Axis to plot onto.
             vrot (Optional[float]): Rotational velocity used to deprojected the
                 spectra. If none is provided, no deprojection is used.
             vrad (Optional[float]): Radial velocity used to deproject the
                 spectra.
-            tgrid (Optional[ndarray]): Theta grid in [rad] used for gridding
-                the data.
-            vgrid (Optional[ndarray]): Velocity grid in [m/s] used for gridding
-                the data.
-            xlims (Optional[list]): Minimum and maximum x range for the figure.
-            ylims (Optional[list]): Minimum and maximum y range for the figure.
-            normalize (Optional[bool]): Normalize each row such that the peak
-                of the line is 1.
-            plot_max (Optional[bool]): Plot the line centroid for each
-                spectrum.
-            method (Optional[str]): The method used to calculate the line
-                centroid if plot_max == True. Must be 'max', 'gaussian' or
-                'quadratic'.
-            imshow (Optional[bool]): Plot using imshow rather than contourf.
             residual (Optional[bool]): If true, subtract the azimuthally
                 averaged line profile.
-            significance (Optional[bool]): Plot the (n * 3) sigma contours for
-                the residuals.
+            xlims (Optional[list]): Minimum and maximum x-range for the figure.
+            ylims (Optional[list]): Minimum and maximum y-range for the figure.
+            tgrid (Optional[ndarray]): Theta grid in [rad] used for gridding
+                the data. By default this spans ``-pi`` to ``pi``.
+            return_fig (Optional[bool]): Whether to return the figure axes.
 
         Returns:
             Matplotlib figure.
         """
+
+        # Deproject the spectra.
         if vrot is None:
-            toplot = self.spectra
+            spectra = self.spectra
         else:
-            toplot = self._deprojected_spectra(vrot=vrot, vrad=vrad)
-        vgrid, tgrid, sgrid = self._grid_river(spnts=toplot,
-                                               tgrid=tgrid,
-                                               vgrid=vgrid)
-        if normalize:
-            sgrid /= np.nanmax(sgrid, axis=1)[:, None]
+            spectra = self._deprojected_spectra(vrot=vrot, vrad=vrad)
 
+        # Get the residual if necessary.
+        mean_spectrum = np.nanmean(spectra, axis=0)
         if residual:
-            scatter = np.nanstd(sgrid, axis=0)
-            sgrid -= np.nanmean(sgrid, axis=0)[None, :]
+            spectra -= mean_spectrum
 
-        import matplotlib.pyplot as plt
-        fig, ax = plt.subplots()
+        # Interpolate onto a linear grid.
+        from scipy.interpolate import interp1d
+        if tgrid is None:
+            tgrid = np.linspace(-np.pi, np.pi, self.theta.size)
+        spectra = [interp1d(self.theta, s, bounds_error=False)(tgrid)
+                   for s in spectra.T]
+        spectra = np.squeeze(spectra).T
 
-        if imshow:
-            vmin = kwargs.pop('vmin', 0 if normalize else None)
-            vmax = kwargs.pop('vmax', 1 if normalize else None)
-            im = ax.imshow(sgrid, origin='lower', interpolation='nearest',
-                           extent=[vgrid[0], vgrid[-1], tgrid[0], tgrid[-1]],
-                           aspect='auto', vmin=vmin, vmax=vmax, **kwargs)
-        else:
-            im = ax.contourf(vgrid, tgrid, sgrid, 50, **kwargs)
-        plt.colorbar(im, pad=0.02)
+        # Estimate the RMS.
+        rms = np.nanmax(spectra)
+        for _ in range(5):
+            rms = np.nanstd(spectra[abs(spectra) <= 3.0 * rms])
 
-        if residual and significance:
-            ax.contour(vgrid, tgrid, abs(sgrid) / scatter[None, :],
-                       np.arange(3, 300, 3), colors='k', linewidths=1.0)
+        # Define the min and max for plotting.
+        vmax = np.nanmax(abs(spectra))
+        vmin = -vmax if residual else -rms
 
-        if plot_max:
-            vmax = self._line_centroids(method=method,
-                                       spectra=sgrid, velax=vgrid)
-            ax.errorbar(vmax, self.theta, color='k', fmt='o', mew=0.0, ms=2)
-
+        # Plot the data.
+        from matplotlib.ticker import MultipleLocator
+        from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
+        fig, ax = plt.subplots(figsize=(6.0, 2.0))
+        ax_divider = make_axes_locatable(ax)
+        im = ax.imshow(spectra, origin='lower', aspect='auto', vmin=vmin,
+                       vmax=vmax, extent=[self.velax[0], self.velax[-1],
+                                          self.theta[0], self.theta[-1]],
+                       cmap='RdBu_r' if residual else 'bone_r')
+        ax.yaxis.set_major_locator(MultipleLocator(1.0))
+        ax.set_xlabel('Velocity (m/s)')
+        ax.set_ylabel('Polar Angle (radians)')
         if xlims is not None:
             ax.set_xlim(xlims[0], xlims[1])
-        else:
-            ax.set_xlim(vgrid[0], vgrid[-1])
-        if ylims is not None:
-            ax.set_ylim(ylims[0], ylims[1])
-        else:
-            ax.set_ylim(tgrid[0], tgrid[-1])
 
-        ax.set_xlabel(r'${\rm Velocity \quad (m\,s^{-1})}$')
-        ax.set_ylabel(r'${\rm Polar \,\, Angle \quad (rad)}$')
-        return fig
+        # Add the mean spectrum panel.
+        if not residual:
+            fig.set_size_inches(6.0, 2.5, forward=True)
+            ax1 = ax_divider.append_axes('top', size='25%', pad='2%')
+            ax1.step(self.velax, mean_spectrum, where='mid', lw=1., c='k')
+            ax1.fill_between(self.velax, mean_spectrum, step='mid', color='.7')
+            ax1.set_ylim(3*vmin, vmax)
+            ax1.set_xlim(ax.get_xlim()[0], ax.get_xlim()[1])
+            ax1.set_xticklabels([])
+            ax1.set_yticklabels([])
+            ax1.tick_params(which='both', left=0, bottom=0, right=0, top=0)
+            for side in ['left', 'right', 'top', 'bottom']:
+                ax1.spines[side].set_visible(False)
+
+        # Add the colorbar.
+        cb_ax = ax_divider.append_axes('right', size='2%', pad='1%')
+        cb = plt.colorbar(im, cax=cb_ax)
+        cb.set_label('Flux Density (Jy/beam)', rotation=270, labelpad=13)
+        plt.tight_layout()
+
+        if return_fig:
+            return fig
 
     # -- Plotting Functions -- #
 
