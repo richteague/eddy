@@ -921,8 +921,8 @@ class annulus(object):
                          method='nearest', **kwargs)
         return vgrid, tgrid, np.where(np.isfinite(sgrid), sgrid, 0.0)
 
-    def plot_river(self, vrot=None, vrad=0.0, residual=False, xlims=None,
-                   ylims=None, tgrid=None, return_fig=False):
+    def plot_river(self, vrot=None, vrad=0.0, residual=False, resample=1,
+                   xlims=None, ylims=None, tgrid=None, return_fig=False):
         """
         Make a river plot, showing how the spectra change around the azimuth.
         This is a nice way to search for structure within the data.
@@ -934,6 +934,11 @@ class annulus(object):
                 spectra.
             residual (Optional[bool]): If true, subtract the azimuthally
                 averaged line profile.
+            resample (Optional[int/float]): Resample the velocity axis by this
+                factor if a ``int``, else set the channel spacing to this value
+                if a ``float``. Note that this is not the same resampling
+                method as used for the spectra and should only be used for
+                qualitative analysis.
             xlims (Optional[list]): Minimum and maximum x-range for the figure.
             ylims (Optional[list]): Minimum and maximum y-range for the figure.
             tgrid (Optional[ndarray]): Theta grid in [rad] used for gridding
@@ -944,11 +949,30 @@ class annulus(object):
             Matplotlib figure.
         """
 
+        # Imports.
+        from scipy.interpolate import interp1d
+        from matplotlib.ticker import MultipleLocator
+        from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
+
         # Deproject the spectra.
         if vrot is None:
             spectra = self.spectra
         else:
             spectra = self._deprojected_spectra(vrot=vrot, vrad=vrad)
+
+        # Brute-force the resampling of the spectra.
+        # Will get around to updating this as some point.
+        if resample != 1:
+            if isinstance(resample, int):
+                resample = self.channel / resample
+            if not isinstance(resample, float):
+                raise TypeError('resample should be a float.')
+            velax = np.arange(self.velax[0], self.velax[-1]+resample, resample)
+            spectra = [interp1d(self.velax, s, bounds_error=False,
+                                kind='linear')(velax) for s in spectra]
+            spectra = np.squeeze(spectra)
+        else:
+            velax = self.velax.copy()
 
         # Get the residual if necessary.
         mean_spectrum = np.nanmean(spectra, axis=0)
@@ -956,7 +980,6 @@ class annulus(object):
             spectra -= mean_spectrum
 
         # Interpolate onto a linear grid.
-        from scipy.interpolate import interp1d
         if tgrid is None:
             tgrid = np.linspace(-np.pi, np.pi, self.theta.size)
         spectra = [interp1d(self.theta, s, bounds_error=False)(tgrid)
@@ -973,12 +996,10 @@ class annulus(object):
         vmin = -vmax if residual else -rms
 
         # Plot the data.
-        from matplotlib.ticker import MultipleLocator
-        from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
         fig, ax = plt.subplots(figsize=(6.0, 2.0))
         ax_divider = make_axes_locatable(ax)
         im = ax.imshow(spectra, origin='lower', aspect='auto', vmin=vmin,
-                       vmax=vmax, extent=[self.velax[0], self.velax[-1],
+                       vmax=vmax, extent=[velax[0], velax[-1],
                                           self.theta[0], self.theta[-1]],
                        cmap='RdBu_r' if residual else 'bone_r')
         ax.yaxis.set_major_locator(MultipleLocator(1.0))
@@ -991,8 +1012,8 @@ class annulus(object):
         if not residual:
             fig.set_size_inches(6.0, 2.5, forward=True)
             ax1 = ax_divider.append_axes('top', size='25%', pad='2%')
-            ax1.step(self.velax, mean_spectrum, where='mid', lw=1., c='k')
-            ax1.fill_between(self.velax, mean_spectrum, step='mid', color='.7')
+            ax1.step(velax, mean_spectrum, where='mid', lw=1., c='k')
+            ax1.fill_between(velax, mean_spectrum, step='mid', color='.7')
             ax1.set_ylim(3*vmin, vmax)
             ax1.set_xlim(ax.get_xlim()[0], ax.get_xlim()[1])
             ax1.set_xticklabels([])
