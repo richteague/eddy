@@ -844,18 +844,24 @@ class annulus(object):
             y (ndarray): Mean of the bin.
             dy (ndarray/None): Standard deviation of the bin.
         """
-        if not resample:
-            if not scatter:
-                return vpnts, spnts
-            return vpnts, spnts, np.zeros(vpnts.size)
+        if isinstance(resample, bool):
+            if not resample:
+                if not scatter:
+                    return vpnts, spnts
+                return vpnts, spnts, np.zeros(vpnts.size)
         if isinstance(resample, (int, bool)):
             bins = int(self.velax.size * int(resample) + 1)
             bins = np.linspace(self.velax[0], self.velax[-1], bins)
         elif isinstance(resample, float):
             bins = np.arange(self.velax[0], self.velax[-1], resample)
             bins += 0.5 * (vpnts.max() - bins[-1])
+        elif isinstance(resample, np.ndarray):
+            bins = 0.5 * np.diff(resample).mean()
+            bins = np.linspace(resample[0] - bins,
+                               resample[-1] + bins,
+                               resample.size + 1)
         else:
-            raise TypeError("Resample must be a boolean, int or float.")
+            raise TypeError("Resample must be a boolean, int, float or array.")
         y, x, _ = binned_statistic(vpnts, spnts, statistic='mean', bins=bins)
         x = np.average([x[1:], x[:-1]], axis=0)
         if not scatter:
@@ -946,7 +952,7 @@ class annulus(object):
             return_fig (Optional[bool]): Whether to return the figure axes.
 
         Returns:
-            Matplotlib figure.
+            Matplotlib figure. To access the axis use ``ax=fig.axes[0]``.
         """
 
         # Imports.
