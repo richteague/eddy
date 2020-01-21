@@ -45,7 +45,7 @@ class rotationmap:
         self.data = np.squeeze(fits.getdata(path))
         self.header = fits.getheader(path)
         if uncertainty is not None:
-            self.error = np.squeeze(fits.getdata(uncertainty))
+            self.error = abs(np.squeeze(fits.getdata(uncertainty)))
         else:
             print("No uncertainties found, assuming uncertainties of 10%.")
             print("You can change this at any time with rotationmap.error.")
