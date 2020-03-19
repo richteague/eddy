@@ -494,7 +494,10 @@ class rotationmap:
         self.set_prior('psi', [0.0, 5.0], 'flat')
         self.set_prior('z1', [-5.0, 5.0], 'flat')
         self.set_prior('phi', [0.0, 5.0], 'flat')
-        self.set_prior('v100', [0.0, 1e4], 'flat')
+        self.set_prior('vp_100', [0.0, 1e4], 'flat')
+        self.set_prior('vp_q', [-2.0, 0.0], 'flat')
+        self.set_prior('vr_100', [-1e3, 1e3], 'flat')
+        self.set_prior('vr_q', [0.0, 1e4], 'flat')
         self.set_prior('vq', [-2.0, 0.0], 'flat')
         self.set_prior('w_i', [0.0, 90.0], 'flat')
         self.set_prior('w_r', [self.dpix, 10.0], 'flat')
@@ -571,16 +574,16 @@ class rotationmap:
             raise KeyError("Must provide `'PA'`.")
 
         # Rotation profile.
-        has_v100 = params.get('v100', False)
+        has_vp_100 = params.get('vp_100', False)
         has_mstar = params.get('mstar', False)
-        if has_mstar and has_v100:
-            raise KeyError("Only provide either `'mstar'` or `'v100'`.")
-        if not has_mstar and not has_v100:
-            raise KeyError("Must provide either `'mstar'` or `'v100'`.")
+        if has_mstar and has_vp_100:
+            raise KeyError("Only provide either `'mstar'` or `'vp_100'`.")
+        if not has_mstar and not has_vp_100:
+            raise KeyError("Must provide either `'mstar'` or `'vp_100'`.")
         if has_mstar:
             params['vfunc'] = self._proj_vkep
         else:
-            params['vq'] = params.pop('vq', -0.5)
+            params['vp_q'] = params.pop('vp_q', -0.5)
             params['vfunc'] = self._proj_vpow
 
         # Flared emission surface.
@@ -719,8 +722,8 @@ class rotationmap:
 
     def _proj_vpow(self, rvals, tvals, zvals, params):
         """Projected power-law rotational velocity profile."""
-        v_phi = params['v100'] * (rvals * params['dist'] / 100.)**params['vq']
-        return self._proj_vphi(v_phi, tvals, params)
+        v_phi = (rvals * params['dist'] / 100.)**params['vp_q']
+        return self._proj_vphi(params['vp_100'] * v_phi, tvals, params)
 
     def _make_model(self, params):
         """Build the velocity model from the dictionary of parameters."""
@@ -745,9 +748,10 @@ class rotationmap:
             vlsr (Optional[float]): Systemic velocity in [m/s].
             r_max (Optional[float]): Maximum offset to consider in [arcsec].
             r_min (Optional[float]): Minimum offset to consider in [arcsec].
-            smooth (Optional[bool/array]): Smooth the line of nodes. If
-                ``True``, smooth with the beam kernel, otherwise ``smooth`` can
-                be a user-defined kernel.
+            smooth (Optional[bool/float]): Smooth the line of nodes. If
+                ``True``, smoth with the beam kernel, otherwise ``smooth``
+                describes the FWHM of the Gaussian convolution kernel in
+                [arcsec].
             through_center (Optional[bool]): If ``True``, force the central
                 pixel to go through ``(0, 0)``.
 
@@ -775,11 +779,13 @@ class rotationmap:
         if through_center:
             resi[abs(self.xaxis).argmin()] = 0.0
         if smooth:
-            if type(smooth) is bool:
+            if isinstance(smooth, bool):
                 kernel = np.hanning(self.bmaj / self.dpix)
+                kernel /= kernel.sum()
             else:
-                kernel = np.squeeze(smooth)
-            resi = np.convolve(resi, kernel / kernel.sum(), mode='same')
+                from astropy.convolution import Gaussian1DKernel
+                kernel = Gaussian1DKernel(smooth / self.fwhm / self.dpix)
+            resi = np.convolve(resi, kernel, mode='same')
         mask = np.logical_and(abs(self.xaxis) <= r_max,
                               abs(self.xaxis) >= r_min)
         x, y = self.xaxis[mask], resi[mask]
@@ -802,9 +808,10 @@ class rotationmap:
             vlsr (Optional[float]): Systemic velocity in [m/s].
             r_max (Optional[float]): Maximum offset to consider in [arcsec].
             r_min (Optional[float]): Minimum offset to consider in [arcsec].
-            smooth (Optional[bool/array]): Smooth the line of nodes. If
-                ``True``, smooth with the beam kernel, otherwise ``smooth`` can
-                be a user-defined normalized kernel.
+            smooth (Optional[bool/float]): Smooth the line of nodes. If
+                ``True``, smoth with the beam kernel, otherwise ``smooth``
+                describes the FWHM of the Gaussian convolution kernel in
+                [arcsec].
             through_center (Optional[bool]): If ``True``, force the central
                 pixel to go through ``(0, 0)``.
 
@@ -832,11 +839,13 @@ class rotationmap:
         if through_center:
             resi[abs(self.yaxis).argmin()] = 0.0
         if smooth:
-            if type(smooth) is bool:
+            if isinstance(smooth, bool):
                 kernel = np.hanning(self.bmaj / self.dpix)
+                kernel /= kernel.sum()
             else:
-                kernel = np.squeeze(smooth)
-            resi = np.convolve(resi, kernel / kernel.sum(), mode='same')
+                from astropy.convolution import Gaussian1DKernel
+                kernel = Gaussian1DKernel(smooth / self.fwhm / self.dpix)
+            resi = np.convolve(resi, kernel, mode='same')
         mask = np.logical_and(abs(self.yaxis) <= r_max,
                               abs(self.yaxis) >= r_min)
         x, y = resi[mask], self.yaxis[mask]
@@ -1229,9 +1238,10 @@ class rotationmap:
             r_min (Optional[float]): Minimum offset to consider in [arcsec].
                 This is useful to skip large regions where beam convolution
                 dominates the map.
-            smooth (Optional[bool/array]): Smooth the line of nodes. If
-                ``True``, smoth with the beam kernel, otherwise ``smooth`` can
-                be a user-defined kernel.
+            smooth (Optional[bool/float]): Smooth the line of nodes. If
+                ``True``, smoth with the beam kernel, otherwise ``smooth``
+                describes the FWHM of the Gaussian convolution kernel in
+                [arcsec].
             through_center (Optional[bool]): If ``True``, force the central
                 pixel to go through ``(0, 0)``.
             plot_axes_kwargs (Optional[dict]): Dictionary of kwargs for the
@@ -1251,7 +1261,8 @@ class rotationmap:
         if plot_axes_kwargs is None:
             plot_axes_kwargs = dict()
         self._plot_axes(ax=ax, x0=x0, y0=y0, inc=inc, PA=PA,
-                        major=r_max, **plot_axes_kwargs)
+                        major=plot_axes_kwargs.pop('major', r_max),
+                        **plot_axes_kwargs)
 
         # Get the pixels for the maximum and minimum values.
         x_maj, y_maj = self.find_maxima(x0=x0, y0=y0, PA=PA, vlsr=vlsr,
