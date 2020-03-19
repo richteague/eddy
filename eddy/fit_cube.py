@@ -498,7 +498,6 @@ class rotationmap:
         self.set_prior('vp_q', [-2.0, 0.0], 'flat')
         self.set_prior('vr_100', [-1e3, 1e3], 'flat')
         self.set_prior('vr_q', [-2.0, 2.0], 'flat')
-        self.set_prior('vq', [-2.0, 0.0], 'flat')
         self.set_prior('w_i', [0.0, 90.0], 'flat')
         self.set_prior('w_r', [self.dpix, 10.0], 'flat')
         self.set_prior('w_t', [-90.0, 90.0], 'flat')
@@ -583,8 +582,8 @@ class rotationmap:
         if has_mstar:
             params['vfunc'] = self._proj_vkep
         else:
-            params['vp_q'] = params.pop('vp_q', -0.5)
             params['vfunc'] = self._proj_vpow
+        params['vp_q'] = params.pop('vp_q', -0.5)
         params['vr_100'] = params.pop('vr_100', 0.0)
         params['vr_q'] = params.pop('vr_q', 0.0)
 
@@ -710,14 +709,6 @@ class rotationmap:
         v_phi = params['vfunc'](rvals, tvals, zvals, params)
         return v_phi + params['vlsr']
 
-    def _proj_vphi(self, v_phi, tvals, params):
-        """Project the rotational velocity."""
-        return v_phi * np.cos(tvals) * abs(np.sin(np.radians(params['inc'])))
-
-    def _proj_vrad(self, v_rad, tvals, params):
-        """Project the radial velocity."""
-        return v_rad * np.sin(tvals) * abs(np.sin(np.radians(params['inc'])))
-
     def _proj_vkep(self, rvals, tvals, zvals, params):
         """Projected Keplerian rotational velocity profile."""
         rvals *= sc.au * params['dist']
@@ -731,8 +722,16 @@ class rotationmap:
         v_phi = (rvals * params['dist'] / 100.)**params['vp_q']
         v_phi = self._proj_vphi(params['vp_100'] * v_phi, tvals, params)
         v_rad = (rvals * params['dist'] / 100.)**params['vr_q']
-        v_rad = self._proj_vphi(params['vr_100'] * v_rad, tvals, params)
+        v_rad = self._proj_vrad(params['vr_100'] * v_rad, tvals, params)
         return v_phi + v_rad
+
+    def _proj_vphi(self, v_phi, tvals, params):
+        """Project the rotational velocity."""
+        return v_phi * np.cos(tvals) * abs(np.sin(np.radians(params['inc'])))
+
+    def _proj_vrad(self, v_rad, tvals, params):
+        """Project the radial velocity."""
+        return v_rad * np.sin(tvals) * abs(np.sin(np.radians(params['inc'])))
 
     def _make_model(self, params):
         """Build the velocity model from the dictionary of parameters."""
