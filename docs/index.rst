@@ -17,14 +17,20 @@ an azimuthally symmetric disk.
 Installation
 ------------
 
-Installation is as easy as cloning the git respository then,
+Installation is as easy as,
+
+.. code-block:: bash
+
+    pip install astro-eddy
+
+If you want to live on the edge, you can clone the repository and install that,
 
 .. code-block:: bash
 
     pip install .
 
-Note that you'll need ``v3.0`` or higher of `emcee`_ in order for this to run
-which must be installed from GitHub rather than through pip or conda.
+but I cannot promise everything will work as described here.
+
 
 
 Contents
@@ -46,6 +52,8 @@ Contents
    tutorials/extractingdata
    tutorials/fitcube_1
    tutorials/fitcube_2
+   tutorials/fitcube_3
+   tutorials/fitcube_4
 
 
 Support

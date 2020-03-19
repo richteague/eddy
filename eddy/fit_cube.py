@@ -497,7 +497,7 @@ class rotationmap:
         self.set_prior('vp_100', [0.0, 1e4], 'flat')
         self.set_prior('vp_q', [-2.0, 0.0], 'flat')
         self.set_prior('vr_100', [-1e3, 1e3], 'flat')
-        self.set_prior('vr_q', [0.0, 1e4], 'flat')
+        self.set_prior('vr_q', [-2.0, 2.0], 'flat')
         self.set_prior('vq', [-2.0, 0.0], 'flat')
         self.set_prior('w_i', [0.0, 90.0], 'flat')
         self.set_prior('w_r', [self.dpix, 10.0], 'flat')
@@ -585,6 +585,8 @@ class rotationmap:
         else:
             params['vp_q'] = params.pop('vp_q', -0.5)
             params['vfunc'] = self._proj_vpow
+        params['vr_100'] = params.pop('vr_100', 0.0)
+        params['vr_q'] = params.pop('vr_q', 0.0)
 
         # Flared emission surface.
         params['z0'] = params.pop('z0', 0.0)
@@ -712,6 +714,10 @@ class rotationmap:
         """Project the rotational velocity."""
         return v_phi * np.cos(tvals) * abs(np.sin(np.radians(params['inc'])))
 
+    def _proj_vrad(self, v_rad, tvals, params):
+        """Project the radial velocity."""
+        return v_rad * np.sin(tvals) * abs(np.sin(np.radians(params['inc'])))
+
     def _proj_vkep(self, rvals, tvals, zvals, params):
         """Projected Keplerian rotational velocity profile."""
         rvals *= sc.au * params['dist']
@@ -723,7 +729,10 @@ class rotationmap:
     def _proj_vpow(self, rvals, tvals, zvals, params):
         """Projected power-law rotational velocity profile."""
         v_phi = (rvals * params['dist'] / 100.)**params['vp_q']
-        return self._proj_vphi(params['vp_100'] * v_phi, tvals, params)
+        v_phi = self._proj_vphi(params['vp_100'] * v_phi, tvals, params)
+        v_rad = (rvals * params['dist'] / 100.)**params['vr_q']
+        v_rad = self._proj_vphi(params['vr_100'] * v_rad, tvals, params)
+        return v_phi + v_rad
 
     def _make_model(self, params):
         """Build the velocity model from the dictionary of parameters."""
@@ -1094,7 +1103,7 @@ class rotationmap:
 
     def plot_surface(self, ax=None, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0,
                      psi=0.0, z1=0.0, phi=1.0, w_i=0.0, w_r=1.0, w_t=0.0,
-                     r_min=0.0, r_max=None, ntheta=16, nrad=10,
+                     r_min=0.0, r_max=None, ntheta=24, nrad=15,
                      check_mask=True, **kwargs):
         """
         Overplot the emission surface onto the provided axis.
@@ -1170,7 +1179,7 @@ class rotationmap:
             tb = np.where(mm, tb, np.nan)
 
         # Popluate the kwargs with defaults.
-        lw = kwargs.pop('lw', kwargs.pop('linewidth', 0.5))
+        lw = kwargs.pop('lw', kwargs.pop('linewidth', 1.0))
         zo = kwargs.pop('zorder', 10000)
         c = kwargs.pop('colors', kwargs.pop('c', 'k'))
 
