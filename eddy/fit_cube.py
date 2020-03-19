@@ -50,7 +50,7 @@ class rotationmap:
         else:
             print("No uncertainties found, assuming uncertainties of 10%.")
             print("You can change this at any time with rotationmap.error.")
-            self.error = 0.1 * self.data
+            self.error = abs(0.1 * self.data)
         self.error = np.where(np.isnan(self.error), 0.0, self.error)
 
         # Convert the data to [km/s].
@@ -198,8 +198,11 @@ class rotationmap:
         # inverse variance mask.
         if optimize:
             p0 = self._optimize_p0(p0, params)
-            temp = rotationmap._populate_dictionary(p0, params)
-            self.ivar = self._calc_ivar(params)
+
+        # Make the mask for fitting.
+        temp = rotationmap._populate_dictionary(p0, params)
+        temp = self.verify_params_dictionary(temp)
+        self.ivar = self._calc_ivar(temp)
 
         # Set up and run the MCMC with emcee.
         time.sleep(0.5)
@@ -207,12 +210,6 @@ class rotationmap:
         emcee_kwargs = {} if emcee_kwargs is None else emcee_kwargs
         emcee_kwargs['scatter'], emcee_kwargs['pool'] = scatter, pool
         for n in range(int(niter)):
-
-            # Recalculate the uncertainties for each iteration.
-            if n > 0:
-                temp = rotationmap._populate_dictionary(p0, params)
-                temp = self.verify_params_dictionary(temp)
-                self.ivar = self._calc_ivar(temp)
 
             # Run the sampler.
             sampler = self._run_mcmc(p0=p0, params=params, nwalkers=nwalkers,
@@ -450,12 +447,12 @@ class rotationmap:
     def _run_mcmc(self, p0, params, nwalkers, nburnin, nsteps, **kwargs):
         """Run the MCMC sampling. Returns the sampler."""
         p0 = self._random_p0(p0, kwargs.pop('scatter', 1e-3), nwalkers)
-        progress = kwargs.pop('progress', True)
         sampler = emcee.EnsembleSampler(nwalkers, p0.shape[1],
                                         self._ln_probability,
                                         args=[params, np.nan],
                                         **kwargs)
         if emcee.__version__ >= '3':
+            progress = kwargs.pop('progress', True)
             sampler.run_mcmc(p0, nburnin + nsteps, progress=progress)
         else:
             sampler.run_mcmc(p0, nburnin + nsteps)
@@ -710,17 +707,19 @@ class rotationmap:
 
     def _proj_vphi(self, v_phi, tvals, params):
         """Project the rotational velocity."""
-        return v_phi * np.cos(tvals) * abs(np.sin(params['inc']))
+        return v_phi * np.cos(tvals) * abs(np.sin(np.radians(params['inc'])))
 
     def _proj_vkep(self, rvals, tvals, zvals, params):
         """Projected Keplerian rotational velocity profile."""
-        v_phi = sc.G * params['mstar'] * self.msun * np.power(rvals, 2.0)
-        v_phi = np.sqrt(v_phi * np.power(np.hypot(rvals, zvals), -3.0))
+        rvals *= sc.au * params['dist']
+        zvals *= sc.au * params['dist']
+        v_phi = sc.G * params['mstar'] * self.msun * np.power(rvals, 2)
+        v_phi = np.sqrt(v_phi * np.power(np.hypot(rvals, zvals), -3))
         return self._proj_vphi(v_phi, tvals, params)
 
     def _proj_vpow(self, rvals, tvals, zvals, params):
         """Projected power-law rotational velocity profile."""
-        v_phi = params['v100'] * (rvals * params['dist'] / 100.0)**params['vq']
+        v_phi = params['v100'] * (rvals * params['dist'] / 100.)**params['vq']
         return self._proj_vphi(v_phi, tvals, params)
 
     def _make_model(self, params):
