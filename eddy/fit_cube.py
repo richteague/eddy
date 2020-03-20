@@ -20,7 +20,9 @@ class rotationmap:
         path (str): Relative path to the rotation map you want to fit.
         uncertainty (optional[srt]): Relative path to the map of v0
             uncertainties. Must be a FITS file with the same shape as the
-            data. If nothing is specified, will assume a 10% on all pixels.
+            data. If nothing is specified, will tried to find an uncerainty
+            file following the ``bettermoments`` format. If this is not found,
+            it will assume a 10% on all pixels.
         clip (optional[float]): If specified, clip the data down to a
             square with sides 2 x clip centered on the image center.
         downsample (optional[int]): Downsample the image by this factor for
@@ -43,13 +45,19 @@ class rotationmap:
     def __init__(self, path, uncertainty=None, clip=None, downsample=None,
                  x0=0.0, y0=0.0, unit='m/s'):
         # Read in the data and position axes.
+        self.path = path
         self.data = np.squeeze(fits.getdata(path))
         self.header = fits.getheader(path)
         if uncertainty is not None:
             self.error = abs(np.squeeze(fits.getdata(uncertainty)))
         else:
-            print("No uncertainties found, assuming uncertainties of 10%.")
-            print("You can change this at any time with rotationmap.error.")
+            try:
+                uncertainty = '_'.join(self.path.split('_')[:-1])
+                uncertainty += '_d' + self.path.split('_')[-1]
+                self.error = abs(np.squeeze(fits.getdata(uncertainty)))
+            except FileNotFoundError:
+                print("No uncertainties found, assuming uncertainties of 10%.")
+                print("Change this at any time with rotationmap.error.")
             self.error = abs(0.1 * self.data)
         self.error = np.where(np.isnan(self.error), 0.0, self.error)
 
@@ -658,7 +666,6 @@ class rotationmap:
         inc = np.radians(inc)
         x_dep = xdisk
         y_dep = ydisk * np.cos(inc) - zdisk * np.sin(inc)
-        z_dep = ydisk * np.sin(inc) + zdisk * np.cos(inc)
 
         # Remove shadowed pixels.
         if inc < 0.0:
