@@ -21,9 +21,7 @@ If things have installed correctly you should be able to run the [Jupyter Notebo
 
 ## Useage
 
-For guides on how to use `eddy` you will find extensive examples in the [documents](https://github.com/richteague/eddy/tree/master/docs).
-
-In brief, `fit_annulus` contains the functionality to infer the rotation profile from an annulus of Doppler shifted spectra, as discussed in [Teague et al. (2018a,](https://ui.adsabs.harvard.edu/#abs/2018ApJ...860L..12T/abstract)[b)](https://ui.adsabs.harvard.edu/#abs/2018ApJ...868..113T/abstract). Functions to fit the rotation map (we shameless recommend [bettermoments](https://github.com/richteague/bettermoments) to make these), including a flared surface geometry can be found in `fit_cube`. This also contains the functionality to deproject images using the geometrical properties of the best fit model.
+For guides on how to use `eddy` you will find extensive examples in the [documents](https://github.com/richteague/eddy/tree/master/docs). We shameless recommend [bettermoments](https://github.com/richteague/bettermoments) to make the moment maps required for the fitting.
 
 ## Attribution
 

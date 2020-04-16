@@ -54,11 +54,12 @@ class rotationmap:
             try:
                 uncertainty = '_'.join(self.path.split('_')[:-1])
                 uncertainty += '_d' + self.path.split('_')[-1]
+                print("Assuming uncertainties in {}".format(uncertainty))
                 self.error = abs(np.squeeze(fits.getdata(uncertainty)))
             except FileNotFoundError:
                 print("No uncertainties found, assuming uncertainties of 10%.")
                 print("Change this at any time with rotationmap.error.")
-            self.error = abs(0.1 * self.data)
+                self.error = 0.1 * abs((self.data - np.nanmedian(self.data)))
         self.error = np.where(np.isnan(self.error), 0.0, self.error)
 
         # Convert the data to [km/s].
@@ -83,7 +84,7 @@ class rotationmap:
         # Clip and downsample the cube to speed things up.
         if downsample is not None:
             if downsample == 'beam':
-                downsample = int(self.bmaj / self.dpix)
+                downsample = int(np.ceil(self.bmaj / self.dpix))
             self._downsample_cube(downsample)
             self.dpix = abs(np.diff(self.xaxis)).mean()
         if clip is not None:
@@ -508,7 +509,7 @@ class rotationmap:
         self.set_prior('vr_q', [-2.0, 2.0], 'flat')
         self.set_prior('w_i', [0.0, 90.0], 'flat')
         self.set_prior('w_r', [self.dpix, 10.0], 'flat')
-        self.set_prior('w_t', [-90.0, 90.0], 'flat')
+        self.set_prior('w_t', [-180.0, 180.0], 'flat')
 
     def _ln_prior(self, params):
         """Log-priors."""
@@ -575,9 +576,9 @@ class rotationmap:
         params['y0'] = params.pop('y0', 0.0)
         params['dist'] = params.pop('dist', 100.0)
         params['vlsr'] = params.pop('vlsr', self.vlsr)
-        if not params.get('inc', False):
+        if params.get('inc', None) is None:
             raise KeyError("Must provide `'inc'`.")
-        if not params.get('PA', False):
+        if params.get('PA', None) is None:
             raise KeyError("Must provide `'PA'`.")
 
         # Rotation profile.
