@@ -645,22 +645,22 @@ class rotationmap:
             warning = "Unknown 'collapse' value {}. "
             warning += "Must be 'mean' or 'median'."
             raise ValueError(warning.format(collapse))
+        verified_params = self.verify_params_dictionary(params.copy())
 
         # Avearge over a random draw of models.
         if isinstance(draws, int):
             models = []
             for idx in np.random.randint(0, samples.shape[0], draws):
-                tmp_sample = self.verify_params_dictionary(samples[idx])
-                tmp_sample = self._populate_dictionary(tmp_sample, params)
-                models += [self._make_model(tmp_sample)]
+                tmp = self._populate_dictionary(samples[idx], verified_params)
+                models += [self._make_model(tmp)]
             collapse_func = np.mean if collapse == 'mean' else np.median
             return collapse_func(models, axis=0)
 
         # Take a percentile of the samples.
         elif isinstance(draws, float):
-            tmp_sample = np.percentile(samples, draws, axis=0)
-            tmp_sample = self._populate_dictionary(tmp_sample, params)
-            return self._make_model(tmp_sample)
+            tmp = np.percentile(samples, draws, axis=0)
+            tmp = self._populate_dictionary(tmp, verified_params)
+            return self._make_model(tmp)
 
         else:
             raise ValueError("'draws' must be a float or integer.")
