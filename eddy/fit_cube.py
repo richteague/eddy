@@ -613,6 +613,58 @@ class rotationmap:
 
         return params
 
+    def evaluate_models(self, samples, params, draws=0.5, collapse='mean'):
+        """
+        Evaluate models based on the samples provided and the parameter
+        dictionary. If ``draws`` is an integer, it represents the number of
+        random draws from ``samples`` which are then averaged to return the
+        model. Alternatively ``draws`` can be a float between 0 and 1,
+        representing the percentile of the samples to use to evaluate the model
+        at.
+
+        Args:
+            samples (ndarray): An array of samples returned from ``fit_map``.
+            params (dict): The parameter dictionary passed to ``fit_map``.
+            draws (Optional[int/float]): If an integer, describes the number of
+                random draws averaged to form the returned model. If a float,
+                represents the percentile used from the samples. Must be
+                between 0 and 1 if a float.
+            collapse (Optional[str]): How to collapse the random number of
+                samples, either via the 'mean' or 'median'.
+
+        Returns:
+            model (ndarray): The sampled model in [m/s].
+        """
+
+        # Check the input.
+        nparam = np.sum([isinstance(params[k], int) for k in params.keys()])
+        if samples.shape[1] != nparam:
+            warning = "Invalid number of free parameters in 'samples': {:d}."
+            raise ValueError(warning.format(nparam))
+        if collapse.lower() not in ['mean', 'median']:
+            warning = "Unknown 'collapse' value {}. "
+            warning += "Must be 'mean' or 'median'."
+            raise ValueError(warning.format(collapse))
+
+        # Avearge over a random draw of models.
+        if isinstance(draws, int):
+            models = []
+            for idx in np.random.randint(0, samples.shape[0], draws):
+                tmp_sample = self.verify_params_dictionary(samples[idx])
+                tmp_sample = self._populate_dictionary(tmp_sample, params)
+                models += [self._make_model(tmp_sample)]
+            collapse_func = np.mean if collapse == 'mean' else np.median
+            return collapse_func(models, axis=0)
+
+        # Take a percentile of the samples.
+        elif isinstance(draws, float):
+            tmp_sample = np.percentile(samples, draws, axis=0)
+            tmp_sample = self._populate_dictionary(tmp_sample, params)
+            return self._make_model(tmp_sample)
+
+        else:
+            raise ValueError("'draws' must be a float or integer.")
+
     # -- Deprojection Functions -- #
 
     @staticmethod
