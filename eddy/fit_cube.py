@@ -613,7 +613,8 @@ class rotationmap:
 
         return params
 
-    def evaluate_models(self, samples, params, draws=0.5, collapse='mean'):
+    def evaluate_models(self, samples, params, draws=0.5,
+                        collapse_func=np.mean, coords_only=False):
         """
         Evaluate models based on the samples provided and the parameter
         dictionary. If ``draws`` is an integer, it represents the number of
@@ -629,11 +630,16 @@ class rotationmap:
                 random draws averaged to form the returned model. If a float,
                 represents the percentile used from the samples. Must be
                 between 0 and 1 if a float.
-            collapse (Optional[str]): How to collapse the random number of
-                samples, either via the 'mean' or 'median'.
+            collapse_func (Optional[callable]): How to collapse the random
+                number of samples. Must be a function which allows an ``axis``
+                argument (as with most Numpy functions).
+            coords_only (Optional[bool]): Return the deprojected coordinates
+                rather than the v0 model. Default is False.
 
         Returns:
-            model (ndarray): The sampled model in [m/s].
+            model (ndarray): The sampled model, either the v0 model, or, if
+                ``coords_only`` is True, the deprojected cylindrical
+                coordinates, (r, t, z).
         """
 
         # Check the input.
@@ -641,10 +647,8 @@ class rotationmap:
         if samples.shape[1] != nparam:
             warning = "Invalid number of free parameters in 'samples': {:d}."
             raise ValueError(warning.format(nparam))
-        if collapse.lower() not in ['mean', 'median']:
-            warning = "Unknown 'collapse' value {}. "
-            warning += "Must be 'mean' or 'median'."
-            raise ValueError(warning.format(collapse))
+        if not callable(collapse_func):
+            raise ValueError("'collapse_func' must be callable.")
         verified_params = self.verify_params_dictionary(params.copy())
 
         # Avearge over a random draw of models.
@@ -652,15 +656,20 @@ class rotationmap:
             models = []
             for idx in np.random.randint(0, samples.shape[0], draws):
                 tmp = self._populate_dictionary(samples[idx], verified_params)
-                models += [self._make_model(tmp)]
-            collapse_func = np.mean if collapse == 'mean' else np.median
+                if coords_only:
+                    models += [self.disk_coords(**tmp)]
+                else:
+                    models += [self._make_model(tmp)]
             return collapse_func(models, axis=0)
 
         # Take a percentile of the samples.
         elif isinstance(draws, float):
             tmp = np.percentile(samples, draws, axis=0)
             tmp = self._populate_dictionary(tmp, verified_params)
-            return self._make_model(tmp)
+            if coords_only:
+                return self.disk_coords(**tmp)
+            else:
+                return self._make_model(tmp)
 
         else:
             raise ValueError("'draws' must be a float or integer.")
