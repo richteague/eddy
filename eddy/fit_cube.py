@@ -99,11 +99,10 @@ class rotationmap:
         # Set priors.
         self._set_default_priors()
 
-    def fit_map(self, p0, params, r_min=None, r_max=None, exclude_r=False,
-                PA_min=None, PA_max=None, exclude_PA=False, abs_PA=False,
-                optimize=True, nwalkers=None, nburnin=300, nsteps=100,
-                scatter=1e-3, plots=None, returns=None, pool=None,
-                emcee_kwargs=None, niter=1):
+    def fit_map(self, p0, params, r_min=None, r_max=None, optimize=True,
+                nwalkers=None, nburnin=300, nsteps=100, scatter=1e-3,
+                plots=None, returns=None, pool=None, emcee_kwargs=None,
+                niter=1):
         """
         Fit a rotation profile to the data. Note that for a disk with
         a non-zero height, the sign of the inclination dictates the direction
@@ -148,14 +147,12 @@ class rotationmap:
                 those foundvfrom the optimization. If this results in a poor
                 initial mask, try with ``optimise=False`` or with a ``niter``
                 value larger than 1.
-            niter (optional[int]): Number of iterations to perform using the
-                median PDF values from the previous MCMC run as starting
-                positions. This is probably only useful if you have no idea
-                about the starting positions for the emission surface or if you
-                want to remove walkers stuck in local minima.
             nwalkers (optional[int]): Number of walkers to use for the MCMC.
+            nburnin (optional[int]): Number of steps to discard for burn-in.
+            nsteps (optional[int]): Number of steps to use to sample the
+                posterior distributions.
             scatter (optional[float]): Scatter used in distributing walker
-                starting positions around the initial p0 values.
+                starting positions around the initial ``p0`` values.
             plots (optional[list]): List of the diagnostic plots to make. This
                 can include ``'mask'``, ``'walkers'``, ``'corner'``,
                 ``'bestfit'``, ``'residual'``, or ``'none'`` if no plots are to
@@ -166,6 +163,11 @@ class rotationmap:
             pool (optional): An object with a `map` method.
             emcee_kwargs (Optional[dict]): Dictionary to pass to the emcee
                 ``EnsembleSampler``.
+            niter (optional[int]): Number of iterations to perform using the
+                median PDF values from the previous MCMC run as starting
+                positions. This is probably only useful if you have no idea
+                about the starting positions for the emission surface or if you
+                want to remove walkers stuck in local minima.
 
         Returns:
             to_return (list): Depending on the returns list provided.
@@ -177,20 +179,15 @@ class rotationmap:
         """
 
         # Check the dictionary. May need some more work.
+        if r_min is not None:
+            if 'r_min' in params.keys():
+                print("Found `r_min` in `params`. Overwriting value.")
+            params['r_min'] = r_min
+        if r_max is not None:
+            if 'r_max' in params.keys():
+                print("Found `r_max` in `params`. Overwriting value.")
+            params['r_max'] = r_max
         params = self.verify_params_dictionary(params)
-
-        # Make the fitting mask.
-        params['r_min'] = 0.0 if r_min is None else r_min
-        params['r_max'] = 1e5 if r_max is None else r_max
-        if params['r_min'] >= params['r_max']:
-            raise ValueError("`r_max` must be greater than `r_min`.")
-        params['exclude_r'] = False if exclude_r is None else exclude_r
-        params['PA_min'] = -np.pi if PA_min is None else PA_min
-        params['PA_max'] = np.pi if PA_max is None else PA_max
-        if params['PA_min'] >= params['PA_max']:
-            raise ValueError("`PA_max` must be great than `PA_min.`")
-        params['exclude_PA'] = False if exclude_PA is None else exclude_PA
-        params['abs_PA'] = False if abs_PA is None else abs_PA
 
         # Generate the mask for fitting based on the params.
         p0 = np.squeeze(p0).astype(float)
@@ -417,9 +414,10 @@ class rotationmap:
         cb.set_label(r'${\rm v_{0} \quad (km\,s^{-1})}$',
                      rotation=270, labelpad=15)
         if ivar is not None:
-            ax.contour(self.xaxis, self.yaxis, ivar, [0], colors='k')
-            ax.contourf(self.xaxis, self.yaxis, ivar, [-0.5, 0.5, 1.5],
-                        colors=['k', 'none'], alpha=0.5)
+            ax.contour(self.xaxis, self.yaxis, ivar,
+                       [0.0], colors='k')
+            ax.contourf(self.xaxis, self.yaxis, ivar,
+                        [-1.0, 0.0], colors='k', alpha=0.5)
         self._gentrify_plot(ax)
         if return_fig:
             return fig
@@ -521,6 +519,8 @@ class rotationmap:
 
     def _calc_ivar(self, params):
         """Calculate the inverse variance including radius mask."""
+
+        # Check the error array is the same shape as the data.
         try:
             assert self.error.shape == self.data.shape
         except AttributeError:
@@ -540,8 +540,14 @@ class rotationmap:
         # Finite value mask.
         mask_f = np.logical_and(np.isfinite(self.data), self.error > 0.0)
 
+        # Include velocity masks.
+        v_min, v_max = params['v_min'], params['v_max']
+        mask_v = np.logical_and(self.data >= v_min, self.data <= v_max)
+        mask_v = ~mask_v if params['exclude_v'] else mask_v
+
         # Combine.
-        mask = np.logical_and(mask_f, np.logical_and(mask_r, mask_t))
+        mask = np.logical_and(np.logical_and(mask_v, mask_f),
+                              np.logical_and(mask_r, mask_t))
         return np.where(mask, np.power(self.error, -2.0), 0.0)
 
     @staticmethod
@@ -607,6 +613,25 @@ class rotationmap:
         params['w_r'] = params.pop('w_r', 1.0)
         params['w_t'] = params.pop('w_t', 0.0)
         params['shadowed'] = params.pop('shadowed', False)
+
+        # Masking parameters.
+        params['r_min'] = params.pop('r_min', 0.0)
+        params['r_max'] = params.pop('r_max', 1e10)
+        params['exclude_r'] = params.pop('exclude_r', False)
+        params['PA_min'] = params.pop('PA_min', -np.pi)
+        params['PA_max'] = params.pop('PA_max', np.pi)
+        params['exclude_PA'] = params.pop('exclude_PA', False)
+        params['abs_PA'] = params.pop('abs_PA', False)
+        params['v_min'] = params.pop('v_min', np.nanmin(self.data))
+        params['v_max'] = params.pop('v_max', np.nanmax(self.data))
+        params['exclude_v'] = params.pop('exclude_v', False)
+
+        if params['r_min'] >= params['r_max']:
+            raise ValueError("`r_max` must be greater than `r_min`.")
+        if params['PA_min'] >= params['PA_max']:
+            raise ValueError("`PA_max` must be great than `PA_min`.")
+        if params['v_min'] >= params['v_max']:
+            raise ValueError("`v_max` must be greater than `v_min`.")
 
         # Beam convolution.
         params['beam'] = False
@@ -1130,15 +1155,15 @@ class rotationmap:
         import matplotlib.pyplot as plt
         ax = plt.subplots()[1]
         vkep = self._make_model(params) * 1e-3
-        # levels = np.where(self.ivar != 0.0, vkep, np.nan)
         levels = np.nanpercentile(vkep, [2, 98])
         levels = np.linspace(levels[0], levels[1], 30)
         im = ax.contourf(self.xaxis, self.yaxis, vkep, levels,
                          cmap=rotationmap.colormap(), extend='both')
         if ivar is not None:
-            ax.contour(self.xaxis, self.yaxis, ivar, [0], colors='k')
-            ax.contourf(self.xaxis, self.yaxis, ivar, [-0.5, 0.5, 1.5],
-                        colors=['k', 'none'], alpha=0.5)
+            ax.contour(self.xaxis, self.yaxis, ivar,
+                       [0.0], colors='k')
+            ax.contourf(self.xaxis, self.yaxis, ivar,
+                        [-1.0, 0.0], colors='k', alpha=0.5)
         cb = plt.colorbar(im, pad=0.02, format='%.2f')
         cb.set_label(r'${\rm v_{mod} \quad (km\,s^{-1})}$',
                      rotation=270, labelpad=15)
@@ -1159,10 +1184,11 @@ class rotationmap:
         im = ax.contourf(self.xaxis, self.yaxis, vres, levels,
                          cmap=cm.RdBu_r, extend='both')
         if ivar is not None:
-            ax.contour(self.xaxis, self.yaxis, ivar, [0], colors='k')
-            ax.contourf(self.xaxis, self.yaxis, ivar, [-0.5, 0.5, 1.5],
-                        colors=['k', 'none'], alpha=0.5)
-        cb = plt.colorbar(im, pad=0.02, format='%d')
+            ax.contour(self.xaxis, self.yaxis, ivar,
+                       [0.0], colors='k')
+            ax.contourf(self.xaxis, self.yaxis, ivar,
+                        [-1.0, 0.0], colors='k', alpha=0.5)
+        cb = plt.colorbar(im, pad=0.02, format='%d', ax=ax)
         cb.set_label(r'${\rm  v_{0} - v_{mod} \quad (m\,s^{-1})}$',
                      rotation=270, labelpad=15)
         self._gentrify_plot(ax)
