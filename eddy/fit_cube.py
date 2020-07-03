@@ -291,9 +291,9 @@ class rotationmap:
         rotationmap.priors[param] = prior
 
     def disk_coords(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
-                    z1=0.0, phi=0.0, w_i=0.0, w_r=1.0, w_t=0.0,
-                    frame='cylindrical', shadowed=False, shadowed_kwargs=None,
-                    **_):
+                    z1=0.0, phi=0.0, r_cavity=0.0, w_i=0.0, w_r=1.0, w_t=0.0,
+                    frame='cylindrical', shadowed=False,
+                    shadowed_kwargs=None, **_):
         r"""
         Get the disk coordinates given certain geometrical parameters and an
         emission surface. The emission surface is parameterized as a powerlaw
@@ -306,8 +306,21 @@ class rotationmap:
 
         Where both ``z0`` and ``z1`` are given in [arcsec]. For a razor thin
         disk, ``z0=0.0``, while for a conical disk, as described in `Rosenfeld
-        et al. (2013)`_, ``psi=1.0``. We can also include a warp which is
-        parameterized by,
+        et al. (2013)`_, ``psi=1.0``.
+
+        We have also implemented the option for a cavity using ``r_cavity``.
+        This modifies the equation about to yield,
+
+        .. math::
+
+            z(r) = z_0 \times \left(\frac{max(0, r - r_{cavity})}{1^{\prime\prime}}\right)^{\psi} +
+            z_1 \times \left(\frac{max(0, r - r_{cavity})}{1^{\prime\prime}}\right)^{\varphi}
+
+        The inclusion of this parameter means that the emission surface
+        variables, such as ``z0``, are no longer directly equivalent to `z/r`
+        values.
+
+        We can also include a warp which is parameterized by,
 
         .. math::
 
@@ -339,6 +352,8 @@ class rotationmap:
             z1 (optional[float]): Correction term for ``z0``.
             phi (optional[float]): Flaring angle correction term for the
                 emission surface.
+            r_cavity (optional[float]): Outer radius of a cavity. Within this
+                region the emission surface is taken to be zero.
             w_i (optional[float]): Warp inclination in [degrees] at the disk
                 center.
             w_r (optional[float]): Scale radius of the warp in [arcsec].
@@ -368,8 +383,9 @@ class rotationmap:
         # Define the emission surface, z_func, and the warp function, w_func.
 
         def z_func(r):
-            z = z0 * np.power(r, psi) + z1 * np.power(r, phi)
-            return np.where(z > 0.0, z, 0.0)
+            rr = np.clip(r - max(0.0, r_cavity), a_min=0.0, a_max=None)
+            z = z0 * np.power(rr, psi) + z1 * np.power(rr, phi)
+            return np.clip(z, a_min=0.0, a_max=None)
 
         def w_func(r, t):
             warp = np.radians(w_i) * np.exp(-0.5 * (r / w_r)**2)
@@ -501,6 +517,7 @@ class rotationmap:
         self.set_prior('psi', [0.0, 5.0], 'flat')
         self.set_prior('z1', [-5.0, 5.0], 'flat')
         self.set_prior('phi', [0.0, 5.0], 'flat')
+        self.set_prior('r_cavity', [0.0, 1e3], 'flat')
         self.set_prior('vp_100', [0.0, 1e4], 'flat')
         self.set_prior('vp_q', [-2.0, 0.0], 'flat')
         self.set_prior('vr_100', [-1e3, 1e3], 'flat')
@@ -526,21 +543,22 @@ class rotationmap:
         except AttributeError:
             self.error = self.error * np.ones(self.data.shape)
 
+        # Deprojected coordinates.
         r, t = self.disk_coords(**params)[:2]
+        t = abs(t) if params['abs_PA'] else t
 
         # Radial mask.
         mask_r = np.logical_and(r >= params['r_min'], r <= params['r_max'])
         mask_r = ~mask_r if params['exclude_r'] else mask_r
 
         # Azimuthal mask.
-        t = abs(t) if params['abs_PA'] else t
         mask_t = np.logical_and(t >= params['PA_min'], t <= params['PA_max'])
         mask_t = ~mask_t if params['exclude_PA'] else mask_t
 
         # Finite value mask.
         mask_f = np.logical_and(np.isfinite(self.data), self.error > 0.0)
 
-        # Include velocity masks.
+        # Velocity mask.
         v_min, v_max = params['v_min'], params['v_max']
         mask_v = np.logical_and(self.data >= v_min, self.data <= v_max)
         mask_v = ~mask_v if params['exclude_v'] else mask_v
@@ -607,6 +625,7 @@ class rotationmap:
         params['psi'] = params.pop('psi', 1.0)
         params['z1'] = params.pop('z1', 0.0)
         params['phi'] = params.pop('phi', 1.0)
+        params['r_cavity'] = params.pop('r_cavity', 0.0)
 
         # Warp parameters.
         params['w_i'] = params.pop('w_i', 0.0)
