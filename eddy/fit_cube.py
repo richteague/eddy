@@ -1186,6 +1186,7 @@ class rotationmap:
         cb = plt.colorbar(im, pad=0.02, format='%.2f')
         cb.set_label(r'${\rm v_{mod} \quad (km\,s^{-1})}$',
                      rotation=270, labelpad=15)
+        cb.minorticks_on()
         self._gentrify_plot(ax)
         if return_ax:
             return ax
@@ -1210,6 +1211,7 @@ class rotationmap:
         cb = plt.colorbar(im, pad=0.02, format='%d', ax=ax)
         cb.set_label(r'${\rm  v_{0} - v_{mod} \quad (m\,s^{-1})}$',
                      rotation=270, labelpad=15)
+        cb.minorticks_on()
         self._gentrify_plot(ax)
         if return_ax:
             return ax
