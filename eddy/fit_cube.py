@@ -102,7 +102,7 @@ class rotationmap:
     def fit_map(self, p0, params, r_min=None, r_max=None, optimize=True,
                 nwalkers=None, nburnin=300, nsteps=100, scatter=1e-3,
                 plots=None, returns=None, pool=None, emcee_kwargs=None,
-                niter=1):
+                niter=1, shadowed=False):
         """
         Fit a rotation profile to the data. Note that for a disk with
         a non-zero height, the sign of the inclination dictates the direction
@@ -556,8 +556,8 @@ class rotationmap:
         self.set_prior('q_taper', [0.0, 5.0], 'flat')
 
         # Warp
-        self.set_prior('w_i', [0.0, 90.0], 'flat')
-        self.set_prior('w_r', [self.dpix, 10.0], 'flat')
+        self.set_prior('w_i', [-90.0, 90.0], 'flat')
+        self.set_prior('w_r', [0.0, self.xaxis.max()], 'flat')
         self.set_prior('w_t', [-180.0, 180.0], 'flat')
 
         # Velocity Profile
@@ -1304,15 +1304,17 @@ class rotationmap:
         rf, tf, zf = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0,
                                       psi=psi, r_cavity=r_cavity,
                                       r_taper=r_taper, q_taper=q_taper)
-        rf = np.where(zf >= 0.0, rf, np.nan)
-        tf = np.where(zf >= 0.0, tf, np.nan)
+        mf = np.logical_and(zf >= 0.0, np.isfinite(self.data))
+        rf = np.where(mf, rf, np.nan)
+        tf = np.where(mf, tf, np.nan)
 
         # Rear half of the disk.
         rb, tb, zb = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=-z0,
                                       psi=psi, r_cavity=r_cavity,
                                       r_taper=r_taper, q_taper=q_taper)
-        rb = np.where(zb <= 0.0, rb, np.nan)
-        tb = np.where(zb <= 0.0, tb, np.nan)
+        mb = np.logical_and(zb <= 0.0, np.isfinite(self.data))
+        rb = np.where(mb, rb, np.nan)
+        tb = np.where(mb, tb, np.nan)
 
         # Flat disk for masking.
         rr, _, _ = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA)
@@ -1343,17 +1345,23 @@ class rotationmap:
         c = kwargs.pop('colors', kwargs.pop('c', 'k'))
 
         radii = np.linspace(0, r_max, int(nrad + 1))[1:]
-        theta = np.linspace(-np.pi, np.pi, int(ntheta + 1))[:-1]
+        theta = np.linspace(-np.pi, np.pi, int(ntheta))
+        theta += np.diff(theta)[0]
 
         # Do the plotting.
         ax.contour(self.xaxis, self.yaxis, rf, levels=radii, colors=c,
                    linewidths=lw, linestyles='-', zorder=zo, **kwargs)
-        ax.contour(self.xaxis, self.yaxis, tf, levels=theta, colors=c,
-                   linewidths=lw, linestyles='-', zorder=zo, **kwargs)
+        for tt in theta:
+            tf_tmp = np.where(abs(tf - tt) <= 0.5, tf, np.nan)
+            ax.contour(self.xaxis, self.yaxis, tf_tmp, levels=[tt], colors=c,
+                       linewidths=lw, linestyles='-', zorder=zo, **kwargs)
         ax.contour(self.xaxis, self.yaxis, rb, levels=radii, colors=c,
                    linewidths=lw, linestyles='--', zorder=zo, **kwargs)
-        ax.contour(self.xaxis, self.yaxis, tb, levels=theta, colors=c,
-                   linewidths=lw, linestyles='--', zorder=zo)
+        for tt in theta:
+            tb_tmp = np.where(abs(tb - tt) <= 0.5, tb, np.nan)
+            ax.contour(self.xaxis, self.yaxis, tb_tmp, levels=theta, colors=c,
+                       linewidths=lw, linestyles='--', zorder=zo)
+
         return ax
 
     def _plot_axes(self, ax, x0=0.0, y0=0.0, inc=0.0, PA=0.0, major=1.0,
