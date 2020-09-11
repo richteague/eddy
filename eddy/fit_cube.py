@@ -208,6 +208,7 @@ class rotationmap:
         # Make the mask for fitting.
         temp = rotationmap._populate_dictionary(p0, params)
         temp = self.verify_params_dictionary(temp)
+
         self.ivar = self._calc_ivar(temp)
 
         # Set up and run the MCMC with emcee.
@@ -291,34 +292,44 @@ class rotationmap:
         rotationmap.priors[param] = prior
 
     def disk_coords(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
-                    z1=0.0, phi=0.0, r_cavity=0.0, w_i=0.0, w_r=1.0, w_t=0.0,
-                    frame='cylindrical', shadowed=False,
+                    r_cavity=0.0, r_taper=None, q_taper=None, w_i=0.0, w_r=1.0,
+                    w_t=0.0, frame='cylindrical', shadowed=False,
                     shadowed_kwargs=None, **_):
         r"""
         Get the disk coordinates given certain geometrical parameters and an
-        emission surface. The emission surface is parameterized as a powerlaw
-        profile:
+        emission surface. The emission surface is most simply described as a
+        power law profile,
 
         .. math::
 
-            z(r) = z_0 \times \left(\frac{r}{1^{\prime\prime}}\right)^{\psi} +
-            z_1 \times \left(\frac{r}{1^{\prime\prime}}\right)^{\varphi}
+            z(r) = z_0 \times \left(\frac{r}{1^{\prime\prime}}\right)^{\psi}
 
-        Where both ``z0`` and ``z1`` are given in [arcsec]. For a razor thin
-        disk, ``z0=0.0``, while for a conical disk, as described in `Rosenfeld
-        et al. (2013)`_, ``psi=1.0``.
+        where ``z0`` and ``psi`` can be provided by the user. With the increase
+        in spatial resolution afforded by interferometers such as ALMA there
+        are a couple of modifications that can be used to provide a better
+        match to the data.
 
-        We have also implemented the option for a cavity using ``r_cavity``.
-        This modifies the equation about to yield,
+        An inner cavity can be included with the ``r_cavity`` argument which
+        makes the transformation:
 
         .. math::
 
-            z(r) = z_0 \times \left(\frac{max(0, r - r_{cavity})}{1^{\prime\prime}}\right)^{\psi} +
-            z_1 \times \left(\frac{max(0, r - r_{cavity})}{1^{\prime\prime}}\right)^{\varphi}
+            \tilde{r} = {\rm max}(0, r - r_{\rm cavity})
 
-        The inclusion of this parameter means that the emission surface
-        variables, such as ``z0``, are no longer directly equivalent to `z/r`
-        values.
+        Note that the inclusion of a cavity will mean that other parameters,
+        such as ``z0``, would need to change as the radial axis has effectively
+        been shifted.
+
+        To account for the drop in emission surface in the outer disk where the
+        gas surface density decreases there are two descriptions. The preferred
+        way is to include an exponential taper to the power law profile,
+
+        .. math::
+
+            z_{\rm tapered}(r) = z(r) \times \exp\left( -\left[
+            \frac{r}{r_{\rm taper}} \right]^{q_{\rm taper}} \right)
+
+        where both ``r_taper`` and ``q_taper`` values must be set.
 
         We can also include a warp which is parameterized by,
 
@@ -380,18 +391,38 @@ class rotationmap:
         if frame not in ['cylindrical', 'cartesian']:
             raise ValueError("frame must be 'cylindrical' or 'cartesian'.")
 
+        # Apply the inclination concention.
+
+        inc = inc if inc < 90.0 else inc - 180.0
+
+        # Check that the necessary pairs are provided.
+
+        msg = "Must specify either both or neither of `{}` and `{}`."
+        if (r_taper is not None) != (q_taper is not None):
+            raise ValueError(msg.format('r_taper', 'q_taper'))
+
+        # Set the defaults.
+
+        z0 = 0.0 if z0 is None else z0
+        psi = 1.0 if psi is None else psi
+        r_cavity = 0.0 if r_cavity is None else r_cavity
+        r_taper = np.inf if r_taper is None else r_taper
+        q_taper = 1.0 if q_taper is None else q_taper
+
         # Define the emission surface, z_func, and the warp function, w_func.
 
-        def z_func(r):
-            rr = np.clip(r - max(0.0, r_cavity), a_min=0.0, a_max=None)
-            z = z0 * np.power(rr, psi) + z1 * np.power(rr, phi)
+        def z_func(r_in):
+            r = np.clip(r_in - r_cavity, a_min=0.0, a_max=None)
+            z = z0 * np.power(r, psi) * np.exp(-np.power(r / r_taper, q_taper))
             return np.clip(z, a_min=0.0, a_max=None)
 
-        def w_func(r, t):
+        def w_func(r_in, t):
+            r = np.clip(r_in - r_cavity, a_min=0.0, a_max=None)
             warp = np.radians(w_i) * np.exp(-0.5 * (r / w_r)**2)
             return r * np.tan(warp * np.sin(t - np.radians(w_t)))
 
         # Calculate the pixel values.
+
         if shadowed:
             if shadowed_kwargs is None:
                 shadowed_kwargs = {}
@@ -453,10 +484,11 @@ class rotationmap:
 
         method = kwargs.pop('method', 'TNC')
         options = kwargs.pop('options', {})
-        options['method'] = options.pop('maxiter', 10000)
+        options['maxiter'] = options.pop('maxiter', 10000)
+        options['maxfun'] = options.pop('maxfun', 10000)
         options['ftol'] = options.pop('ftol', 1e-3)
-        res = minimize(nlnL, x0=theta, method=method, options=options)
 
+        res = minimize(nlnL, x0=theta, method=method, options=options)
         if res.success:
             theta = res.x
             print("Optimized starting positions:")
@@ -506,6 +538,8 @@ class rotationmap:
 
     def _set_default_priors(self):
         """Set the default priors."""
+
+        # Basic Geometry.
         self.set_prior('x0', [-0.5, 0.5], 'flat')
         self.set_prior('y0', [-0.5, 0.5], 'flat')
         self.set_prior('inc', [-90.0, 90.0], 'flat')
@@ -513,18 +547,24 @@ class rotationmap:
         self.set_prior('mstar', [0.1, 5.0], 'flat')
         self.set_prior('vlsr', [np.nanmin(self.data) * 1e3,
                                 np.nanmax(self.data) * 1e3], 'flat')
+
+        # Emission Surface
         self.set_prior('z0', [0.0, 5.0], 'flat')
         self.set_prior('psi', [0.0, 5.0], 'flat')
-        self.set_prior('z1', [-5.0, 5.0], 'flat')
-        self.set_prior('phi', [0.0, 5.0], 'flat')
-        self.set_prior('r_cavity', [0.0, 1e3], 'flat')
+        self.set_prior('r_cavity', [0.0, 1e30], 'flat')
+        self.set_prior('r_taper', [0.0, 1e30], 'flat')
+        self.set_prior('q_taper', [0.0, 5.0], 'flat')
+
+        # Warp
+        self.set_prior('w_i', [0.0, 90.0], 'flat')
+        self.set_prior('w_r', [self.dpix, 10.0], 'flat')
+        self.set_prior('w_t', [-180.0, 180.0], 'flat')
+
+        # Velocity Profile
         self.set_prior('vp_100', [0.0, 1e4], 'flat')
         self.set_prior('vp_q', [-2.0, 0.0], 'flat')
         self.set_prior('vr_100', [-1e3, 1e3], 'flat')
         self.set_prior('vr_q', [-2.0, 2.0], 'flat')
-        self.set_prior('w_i', [0.0, 90.0], 'flat')
-        self.set_prior('w_r', [self.dpix, 10.0], 'flat')
-        self.set_prior('w_t', [-180.0, 180.0], 'flat')
 
     def _ln_prior(self, params):
         """Log-priors."""
@@ -532,6 +572,8 @@ class rotationmap:
         for key in params.keys():
             if key in rotationmap.priors.keys():
                 lnp += rotationmap.priors[key](params[key])
+                if not np.isfinite(lnp):
+                    return lnp
         return lnp
 
     def _calc_ivar(self, params):
@@ -623,8 +665,8 @@ class rotationmap:
         # Flared emission surface.
         params['z0'] = params.pop('z0', 0.0)
         params['psi'] = params.pop('psi', 1.0)
-        params['z1'] = params.pop('z1', 0.0)
-        params['phi'] = params.pop('phi', 1.0)
+        params['r_taper'] = params.pop('r_taper', 1e10)
+        params['q_taper'] = params.pop('q_taper', 1.0)
         params['r_cavity'] = params.pop('r_cavity', 0.0)
 
         # Warp parameters.
@@ -1217,9 +1259,9 @@ class rotationmap:
             return ax
 
     def plot_surface(self, ax=None, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0,
-                     psi=0.0, z1=0.0, phi=1.0, w_i=0.0, w_r=1.0, w_t=0.0,
-                     r_min=0.0, r_max=None, ntheta=24, nrad=15,
-                     check_mask=True, **kwargs):
+                     psi=0.0, r_cavity=0.0, r_taper=None, q_taper=None,
+                     w_i=0.0, w_r=1.0, w_t=0.0, r_min=0.0, r_max=None,
+                     ntheta=24, nrad=15, check_mask=True, **kwargs):
         """
         Overplot the emission surface onto the provided axis.
 
@@ -1260,13 +1302,15 @@ class rotationmap:
 
         # Front half of the disk.
         rf, tf, zf = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0,
-                                      psi=psi, z1=z1, phi=phi)
+                                      psi=psi, r_cavity=r_cavity,
+                                      r_taper=r_taper, q_taper=q_taper)
         rf = np.where(zf >= 0.0, rf, np.nan)
         tf = np.where(zf >= 0.0, tf, np.nan)
 
         # Rear half of the disk.
         rb, tb, zb = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=-z0,
-                                      psi=psi, z1=-z1, phi=phi)
+                                      psi=psi, r_cavity=r_cavity,
+                                      r_taper=r_taper, q_taper=q_taper)
         rb = np.where(zb <= 0.0, rb, np.nan)
         tb = np.where(zb <= 0.0, tb, np.nan)
 
