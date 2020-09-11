@@ -196,9 +196,14 @@ class rotationmap:
 
         # Check what the parameters are.
         labels = rotationmap._get_labels(params)
+        labels_raw = []
+        for label in labels:
+            label_raw = label.replace('$', '').replace('{', '')
+            label_raw = label_raw.replace(r'\rm ', '').replace('}', '')
+            labels_raw += [label_raw]
         if len(labels) != len(p0):
             raise ValueError("Mismatch in labels and p0. Check for integers.")
-        print("Assuming:\n\tp0 = [%s]." % (', '.join(labels)))
+        print("Assuming:\n\tp0 = [%s]." % (', '.join(labels_raw)))
 
         # Run an initial optimization using scipy.minimize. Recalculate the
         # inverse variance mask.
@@ -618,7 +623,13 @@ class rotationmap:
             if isinstance(params[k], int):
                 if not isinstance(params[k], bool):
                     idxs.append(params[k])
-                    labs.append(r'${{\rm {}}}$'.format(k))
+                    try:
+                        idx = k.index('_') + 1
+                        label = k[:idx] + '{{' + k[idx:] + '}}'
+                    except ValueError:
+                        label = k
+                    label = r'${{\rm {}}}$'.format(label)
+                    labs.append(label)
         return np.array(labs)[np.argsort(idxs)]
 
     @staticmethod
