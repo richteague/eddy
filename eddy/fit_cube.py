@@ -98,6 +98,7 @@ class rotationmap:
 
         # Set priors.
         self._set_default_priors()
+        self.shadowed = False
 
     def fit_map(self, p0, params, r_min=None, r_max=None, optimize=True,
                 nwalkers=None, nburnin=300, nsteps=100, scatter=1e-3,
@@ -188,6 +189,7 @@ class rotationmap:
                 print("Found `r_max` in `params`. Overwriting value.")
             params['r_max'] = r_max
         params = self.verify_params_dictionary(params)
+        self.shadowed = shadowed
 
         # Generate the mask for fitting based on the params.
         p0 = np.squeeze(p0).astype(float)
@@ -269,6 +271,7 @@ class rotationmap:
             to_return += [np.percentile(samples, [16, 50, 84], axis=0)]
         if 'dict' in returns:
             to_return += [medians]
+        self.shadowed = False
         return to_return if len(to_return) > 1 else to_return[0]
 
     def set_prior(self, param, args, type='flat'):
@@ -298,8 +301,7 @@ class rotationmap:
 
     def disk_coords(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
                     r_cavity=0.0, r_taper=None, q_taper=None, w_i=0.0, w_r=1.0,
-                    w_t=0.0, frame='cylindrical', shadowed=False,
-                    shadowed_kwargs=None, **_):
+                    w_t=0.0, frame='cylindrical', shadowed_kwargs=None, **_):
         r"""
         Get the disk coordinates given certain geometrical parameters and an
         emission surface. The emission surface is most simply described as a
@@ -428,7 +430,7 @@ class rotationmap:
 
         # Calculate the pixel values.
 
-        if shadowed:
+        if self.shadowed:
             if shadowed_kwargs is None:
                 shadowed_kwargs = {}
             r, t, z = self._get_shadowed_coords(x0, y0, inc, PA, z_func,
@@ -463,6 +465,7 @@ class rotationmap:
         im = ax.contourf(self.xaxis, self.yaxis, self.data, levels,
                          cmap=rotationmap.colormap(), extend='both', zorder=-9)
         cb = plt.colorbar(im, pad=0.03, format='%.2f')
+        cb.minorticks_on()
         cb.set_label(r'${\rm v_{0} \quad (km\,s^{-1})}$',
                      rotation=270, labelpad=15)
         if ivar is not None:
@@ -568,6 +571,8 @@ class rotationmap:
         # Velocity Profile
         self.set_prior('vp_100', [0.0, 1e4], 'flat')
         self.set_prior('vp_q', [-2.0, 0.0], 'flat')
+        self.set_prior('vp_rtaper', [0.0, 1e30], 'flat')
+        self.set_prior('vp_qtaper', [0.0, 5.0], 'flat')
         self.set_prior('vr_100', [-1e3, 1e3], 'flat')
         self.set_prior('vr_q', [-2.0, 2.0], 'flat')
 
@@ -670,6 +675,8 @@ class rotationmap:
         else:
             params['vfunc'] = self._proj_vpow
         params['vp_q'] = params.pop('vp_q', -0.5)
+        params['vp_rtaper'] = params.pop('vp_rtaper', 1e10)
+        params['vp_qtaper'] = params.pop('vp_qtaper', 1.0)
         params['vr_100'] = params.pop('vr_100', 0.0)
         params['vr_q'] = params.pop('vr_q', 0.0)
 
@@ -886,6 +893,7 @@ class rotationmap:
     def _proj_vpow(self, rvals, tvals, zvals, params):
         """Projected power-law rotational velocity profile."""
         v_phi = (rvals * params['dist'] / 100.)**params['vp_q']
+        v_phi *= np.exp(-(rvals / params['vp_rtaper'])**params['vp_qtaper'])
         v_phi = self._proj_vphi(params['vp_100'] * v_phi, tvals, params)
         v_rad = (rvals * params['dist'] / 100.)**params['vr_q']
         v_rad = self._proj_vrad(params['vr_100'] * v_rad, tvals, params)
