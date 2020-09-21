@@ -98,7 +98,12 @@ class rotationmap:
 
         # Set priors.
         self._set_default_priors()
+
+        # Set the defaults for 'shadowed' emission surfaces.
         self.shadowed = False
+        self.shadowed_extend = 1.5
+        self.shadowed_oversample = 2.0
+        self.shadowed_method = 'nearest'
 
     def fit_map(self, p0, params, r_min=None, r_max=None, optimize=True,
                 nwalkers=None, nburnin=300, nsteps=100, scatter=1e-3,
@@ -301,7 +306,7 @@ class rotationmap:
 
     def disk_coords(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=0.0,
                     r_cavity=0.0, r_taper=None, q_taper=None, w_i=0.0, w_r=1.0,
-                    w_t=0.0, frame='cylindrical', shadowed_kwargs=None, **_):
+                    w_t=0.0, frame='cylindrical', **_):
         r"""
         Get the disk coordinates given certain geometrical parameters and an
         emission surface. The emission surface is most simply described as a
@@ -378,12 +383,6 @@ class rotationmap:
             w_t (optional[float]): Angle of nodes of the warp in [degrees].
             frame (optional[str]): Frame of reference for the returned
                 coordinates. Either ``'cartesian'`` or ``'cylindrical'``.
-            shadowed (optional[bool]): If true, use a more robust, however
-                slower deprojection routine which accurately takes into account
-                shadowing at high inclinations.
-            shadowed_kwargs (optional[dict]): Optional kwargs to be passed to
-                ``_get_shadowed_coords`` including ``_get_diskframe_coords``
-                and ``scipy.interpolate.griddata``.
 
         Returns:
             array, array, array: Three coordinate arrays with ``(r, phi, z)``,
@@ -431,14 +430,12 @@ class rotationmap:
         # Calculate the pixel values.
 
         if self.shadowed:
-            if shadowed_kwargs is None:
-                shadowed_kwargs = {}
-            r, t, z = self._get_shadowed_coords(x0, y0, inc, PA, z_func,
-                                                w_func, **shadowed_kwargs)
+            coords = self._get_shadowed_coords(x0, y0, inc, PA, z_func, w_func)
         else:
-            r, t, z = self._get_flared_coords(x0, y0, inc, PA, z_func, w_func)
+            coords = self._get_flared_coords(x0, y0, inc, PA, z_func, w_func)
         if frame == 'cylindrical':
-            return r, t, z
+            return coords
+        r, t, z = coords
         return r * np.cos(t), r * np.sin(t), z
 
     def plot_data(self, levels=None, ivar=None, return_fig=False):
@@ -818,12 +815,12 @@ class rotationmap:
             t_tmp = np.arctan2(y_tmp, x_mid)
         return r_tmp, t_tmp, z_func(r_tmp)
 
-    def _get_shadowed_coords(self, x0, y0, inc, PA, z_func, w_func, **kwargs):
+    def _get_shadowed_coords(self, x0, y0, inc, PA, z_func, w_func):
         """Return cyclindrical coords of surface in [arcsec, rad, arcsec]."""
 
         # Make the disk-frame coordinates.
-        extend = kwargs.pop('extend', 2.0)
-        oversample = kwargs.pop('oversample', 2.0)
+        extend = self.shadowed_extend
+        oversample = self.shadowed_oversample
         diskframe_coords = self._get_diskframe_coords(extend, oversample)
         xdisk, ydisk, rdisk, tdisk = diskframe_coords
         zdisk = z_func(rdisk) + w_func(rdisk, tdisk)
@@ -847,9 +844,10 @@ class rotationmap:
         from scipy.interpolate import griddata
         disk = (x_rot.flatten(), y_rot.flatten())
         grid = (self.xaxis[None, :], self.yaxis[:, None])
-        kwargs['method'] = kwargs.get('method', 'nearest')
-        r_obs = griddata(disk, rdisk.flatten(), grid, **kwargs)
-        t_obs = griddata(disk, tdisk.flatten(), grid, **kwargs)
+        r_obs = griddata(disk, rdisk.flatten(), grid,
+                         method=self.shadowed_method)
+        t_obs = griddata(disk, tdisk.flatten(), grid,
+                         method=self.shadowed_method)
         return r_obs, t_obs, z_func(r_obs)
 
     def _get_diskframe_coords(self, extend=2.0, oversample=0.5):
