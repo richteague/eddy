@@ -1414,7 +1414,8 @@ class rotationmap:
 
     def plot_maxima(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, vlsr=None,
                     r_max=1.0, r_min=None, smooth=False, through_center=True,
-                    plot_axes_kwargs=None, plot_kwargs=None, return_fig=False):
+                    levels=None, plot_axes_kwargs=None, plot_kwargs=None,
+                    return_fig=False):
         """
         Mark the position of the maximum velocity as a function of radius. This
         can help demonstrate if there is an appreciable bend in velocity
@@ -1437,6 +1438,7 @@ class rotationmap:
                 [arcsec].
             through_center (Optional[bool]): If ``True``, force the central
                 pixel to go through ``(0, 0)``.
+            levels (Optional[array]): Levels to pass to ``plot_data``.
             plot_axes_kwargs (Optional[dict]): Dictionary of kwargs for the
                 plot_axes function.
             plot_kwargs (Optional[dict]): Dictionary of kwargs for the
@@ -1449,7 +1451,7 @@ class rotationmap:
         """
 
         # Background figure.
-        fig = self.plot_data(return_fig=True)
+        fig = self.plot_data(levels=levels, return_fig=True)
         ax = fig.axes[0]
         if plot_axes_kwargs is None:
             plot_axes_kwargs = dict()
