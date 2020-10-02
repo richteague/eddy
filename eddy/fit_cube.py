@@ -661,8 +661,8 @@ class rotationmap:
             raise KeyError("Must provide `'PA'`.")
 
         # Rotation profile.
-        has_vp_100 = params.get('vp_100', False)
-        has_mstar = params.get('mstar', False)
+        has_vp_100 = False if params.get('vp_100') is None else True
+        has_mstar = False if params.get('mstar') is None else True
         if has_mstar and has_vp_100:
             raise KeyError("Only provide either `'mstar'` or `'vp_100'`.")
         if not has_mstar and not has_vp_100:
