@@ -4,6 +4,7 @@ import time
 import emcee
 import numpy as np
 from astropy.io import fits
+from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel
 import scipy.constants as sc
 import warnings
 
@@ -689,7 +690,7 @@ class rotationmap:
 
         # Warp parameters.
         params['w_i'] = params.pop('w_i', 0.0)
-        params['w_r'] = params.pop('w_r', 1.0)
+        params['w_r'] = params.pop('w_r', 0.5 * max(self.xaxis))
         params['w_t'] = params.pop('w_t', 0.0)
         params['shadowed'] = params.pop('shadowed', False)
 
@@ -713,7 +714,7 @@ class rotationmap:
             raise ValueError("`v_max` must be greater than `v_min`.")
 
         # Beam convolution.
-        params['beam'] = False
+        params['beam'] = bool(params.pop('beam', False))
 
         return params
 
@@ -1097,24 +1098,28 @@ class rotationmap:
 
     def _clip_cube(self, radius):
         """Clip the cube to +/- radius arcseconds from the origin."""
-        xa = abs(self.xaxis - radius).argmin()
-        if self.xaxis[xa] < radius:
-            xa -= 1
-        xb = abs(self.xaxis + radius).argmin()
-        if -self.xaxis[xb] < radius:
+        if radius < max(self.xaxis) and radius < max(self.yaxis):
+            xa = abs(self.xaxis - radius).argmin()
+            if self.xaxis[xa] < radius:
+                xa -= 1
+            xb = abs(self.xaxis + radius).argmin()
+            if -self.xaxis[xb] < radius:
+                xb += 1
             xb += 1
-        xb += 1
-        ya = abs(self.yaxis + radius).argmin()
-        if -self.yaxis[ya] < radius:
-            ya -= 1
-        yb = abs(self.yaxis - radius).argmin()
-        if self.yaxis[yb] < radius:
+            ya = abs(self.yaxis + radius).argmin()
+            if -self.yaxis[ya] < radius:
+                ya -= 1
+            yb = abs(self.yaxis - radius).argmin()
+            if self.yaxis[yb] < radius:
+                yb += 1
             yb += 1
-        yb += 1
-        self.xaxis = self.xaxis[xa:xb]
-        self.yaxis = self.yaxis[ya:yb]
-        self.data = self.data[ya:yb, xa:xb]
-        self.error = self.error[ya:yb, xa:xb]
+            self.xaxis = self.xaxis[xa:xb]
+            self.yaxis = self.yaxis[ya:yb]
+            self.data = self.data[ya:yb, xa:xb]
+            self.error = self.error[ya:yb, xa:xb]
+        else:
+            FOV = 2.0 * max(max(self.xaxis), max(self.yaxis))
+            print('Attached image only has FOV of {:.1f}".'.format(FOV))
 
     def _downsample_cube(self, N):
         """Downsample the cube to make faster calculations."""
@@ -1189,30 +1194,23 @@ class rotationmap:
             self.bpa = 0.0
             self.beamarea = self.dpix**2.0
 
+    @property
+    def beam(self):
+        """Returns the beam major and minor axes, and position angle."""
+        return self.bmaj, self.bmin, self.bpa
+
     def _beamkernel(self):
         """Returns the 2D Gaussian kernel for convolution."""
-        from astropy.convolution import Kernel
         bmaj = self.bmaj / self.dpix / self.fwhm
         bmin = self.bmin / self.dpix / self.fwhm
-        bpa = np.radians(self.bpa)
-        return Kernel(self._gaussian2D(bmin, bmaj, bpa + 90.).T)
-
-    def _gaussian2D(self, dx, dy, PA=0.0):
-        """2D Gaussian kernel in pixel coordinates."""
-        xm = np.arange(-4*np.nanmax([dy, dx]), 4*np.nanmax([dy, dx])+1)
-        x, y = np.meshgrid(xm, xm)
-        x, y = self._rotate_coords(x, y, PA)
-        k = np.power(x / dx, 2) + np.power(y / dy, 2)
-        return np.exp(-0.5 * k) / 2. / np.pi / dx / dy
+        return Gaussian2DKernel(bmin, bmaj, np.radians(self.bpa))
 
     @staticmethod
     def _convolve_image(image, kernel, fast=True):
         """Convolve the image with the provided kernel."""
         if fast:
-            from astropy.convolution import convolve_fft
-            return convolve_fft(image, kernel)
-        from astropy.convolution import convolve
-        return convolve(image, kernel)
+            return convolve_fft(image, kernel, preserve_nan=True)
+        return convolve(image, kernel, preserve_nan=True)
 
     # -- Plotting functions. -- #
 
