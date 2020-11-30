@@ -23,8 +23,8 @@ class rotationmap:
             data. If nothing is specified, will tried to find an uncerainty
             file following the ``bettermoments`` format. If this is not found,
             it will assume a 10% on all pixels.
-        clip (optional[float]): If specified, clip the data down to a
-            square with sides 2 x clip centered on the image center.
+        FOV (optional[float]): If specified, clip the data down to a
+            square field of view with sides of `FOV` [arcsec].
         downsample (optional[int]): Downsample the image by this factor for
             quicker fitting. For example, using ``downsample=4`` on an image
             which is 1000 x 1000 pixels will reduce it to 250 x 250 pixels.
@@ -42,8 +42,8 @@ class rotationmap:
     disk_coords_niter = 5
     priors = {}
 
-    def __init__(self, path, uncertainty=None, clip=None, downsample=None,
-                 x0=0.0, y0=0.0, unit='m/s'):
+    def __init__(self, path, uncertainty=None, FOV=None, downsample=None,
+                 x0=0.0, y0=0.0, unit='m/s', clip=None):
         # Read in the data and position axes.
         self.path = path
         self.data = np.squeeze(fits.getdata(path))
@@ -88,7 +88,10 @@ class rotationmap:
             self._downsample_cube(downsample)
             self.dpix = abs(np.diff(self.xaxis)).mean()
         if clip is not None:
-            self._clip_cube(clip)
+            print("WARNING: `clip` is being depreciate. Use `FOV` instead.")
+            FOV = 2.0 * clip
+        if FOV is not None:
+            self._clip_cube(FOV / 2.0)
         self.nypix = self.yaxis.size
         self.nxpix = self.xaxis.size
         self.mask = np.isfinite(self.data)
