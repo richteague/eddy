@@ -168,8 +168,9 @@ class rotationmap:
                 ``'bestfit'``, ``'residual'``, or ``'none'`` if no plots are to
                 be plotted. By default, all are plotted.
             returns (optional[list]): List of items to return. Can contain
-                ``'samples'``, ``'percentiles'``, ``'dict'`` or ``'none'``. By
-                default only ``'percentiles'`` are returned.
+                ``'samples'``, ``'percentiles'``, ``'dict'``, ``'model'``,
+                ``'residuals'`` or ``'none'``. By default only
+                ``'percentiles'`` are returned.
             pool (optional): An object with a `map` method.
             emcee_kwargs (Optional[dict]): Dictionary to pass to the emcee
                 ``EnsembleSampler``.
@@ -189,6 +190,7 @@ class rotationmap:
         """
 
         # Check the dictionary. May need some more work.
+
         if r_min is not None:
             if 'r_min' in params.keys():
                 print("Found `r_min` in `params`. Overwriting value.")
@@ -197,16 +199,19 @@ class rotationmap:
             if 'r_max' in params.keys():
                 print("Found `r_max` in `params`. Overwriting value.")
             params['r_max'] = r_max
-        params = self.verify_params_dictionary(params)
+
+        params_tmp = self.verify_params_dictionary(params.copy())
         self.shadowed = shadowed
 
         # Generate the mask for fitting based on the params.
+
         p0 = np.squeeze(p0).astype(float)
-        temp = rotationmap._populate_dictionary(p0, params)
+        temp = rotationmap._populate_dictionary(p0, params_tmp)
         self.ivar = self._calc_ivar(temp)
 
         # Check what the parameters are.
-        labels = rotationmap._get_labels(params)
+
+        labels = rotationmap._get_labels(params_tmp)
         labels_raw = []
         for label in labels:
             label_raw = label.replace('$', '').replace('{', '')
@@ -218,16 +223,18 @@ class rotationmap:
 
         # Run an initial optimization using scipy.minimize. Recalculate the
         # inverse variance mask.
+
         if optimize:
-            p0 = self._optimize_p0(p0, params)
+            p0 = self._optimize_p0(p0, params_tmp)
 
         # Make the mask for fitting.
-        temp = rotationmap._populate_dictionary(p0, params)
-        temp = self.verify_params_dictionary(temp)
 
+        temp = rotationmap._populate_dictionary(p0, params_tmp)
+        temp = self.verify_params_dictionary(temp)
         self.ivar = self._calc_ivar(temp)
 
         # Set up and run the MCMC with emcee.
+
         time.sleep(0.5)
         nwalkers = 2 * p0.size if nwalkers is None else nwalkers
         emcee_kwargs = {} if emcee_kwargs is None else emcee_kwargs
@@ -235,20 +242,23 @@ class rotationmap:
         for n in range(int(niter)):
 
             # Run the sampler.
-            sampler = self._run_mcmc(p0=p0, params=params, nwalkers=nwalkers,
-                                     nburnin=nburnin, nsteps=nsteps,
-                                     **emcee_kwargs)
-            if type(params['PA']) is int:
-                sampler.chain[:, :, params['PA']] %= 360.0
+
+            sampler = self._run_mcmc(p0=p0, params=params_tmp,
+                                     nwalkers=nwalkers, nburnin=nburnin,
+                                     nsteps=nsteps, **emcee_kwargs)
+            if type(params_tmp['PA']) is int:
+                sampler.chain[:, :, params_tmp['PA']] %= 360.0
 
             # Split off the samples.
+
             samples = sampler.chain[:, -int(nsteps):]
             samples = samples.reshape(-1, samples.shape[-1])
             p0 = np.median(samples, axis=0)
-            medians = rotationmap._populate_dictionary(p0, params)
+            medians = rotationmap._populate_dictionary(p0, params_tmp)
             medians = self.verify_params_dictionary(medians)
 
         # Diagnostic plots.
+
         if plots is None:
             plots = ['mask', 'walkers', 'corner', 'bestfit', 'residual']
         plots = np.atleast_1d(plots)
@@ -266,12 +276,15 @@ class rotationmap:
             self._plot_residual(medians, ivar=self.ivar)
 
         # Generate the output.
+
+        to_return = []
+
         if returns is None:
             returns = ['percentiles']
         returns = np.atleast_1d(returns)
+
         if 'none' in returns:
             return None
-        to_return = []
         if 'samples' in returns:
             to_return += [samples]
         if 'lnprob' in returns:
@@ -280,6 +293,11 @@ class rotationmap:
             to_return += [np.percentile(samples, [16, 50, 84], axis=0)]
         if 'dict' in returns:
             to_return += [medians]
+        if 'model' in returns:
+            to_return += [self.evaluate_models(samples, params)]
+        if 'residual' in returns:
+            to_return += [self.data - self.evaluate_models(samples, params)]
+
         self.shadowed = False
         return to_return if len(to_return) > 1 else to_return[0]
 
