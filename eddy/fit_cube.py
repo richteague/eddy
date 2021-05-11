@@ -254,7 +254,7 @@ class rotationmap:
             samples = sampler.chain[:, -int(nsteps):]
             samples = samples.reshape(-1, samples.shape[-1])
             p0 = np.median(samples, axis=0)
-            medians = rotationmap._populate_dictionary(p0, params_tmp)
+            medians = rotationmap._populate_dictionary(p0, params.copy())
             medians = self.verify_params_dictionary(medians)
 
         # Diagnostic plots.
@@ -293,10 +293,12 @@ class rotationmap:
             to_return += [np.percentile(samples, [16, 50, 84], axis=0)]
         if 'dict' in returns:
             to_return += [medians]
-        if 'model' in returns:
-            to_return += [self.evaluate_models(samples, params)]
-        if 'residual' in returns:
-            to_return += [self.data - self.evaluate_models(samples, params)]
+        if 'model' in returns or 'residual' in returns:
+            model = self.evaluate_models(samples, params)
+            if 'model' in returns:
+                to_return += [model]
+            if 'residual' in returns:
+                to_return += [self.data * 1e3 - model]
 
         self.shadowed = False
         return to_return if len(to_return) > 1 else to_return[0]
@@ -471,6 +473,7 @@ class rotationmap:
                 draw a solid contour around the regions with finite ``ivar``
                 values and fill regions not considered.
             return_fig (optional[bool]): Return the figure.
+
         Returns:
             fig (Matplotlib figure): If ``return_fig`` is ``True``. Can access
                 the axes through ``fig.axes`` for additional plotting.
@@ -775,7 +778,8 @@ class rotationmap:
         verified_params = self.verify_params_dictionary(params.copy())
 
         # Avearge over a random draw of models.
-        if isinstance(draws, int):
+
+        if isinstance(int(draws) if draws > 1.0 else draws, int):
             models = []
             for idx in np.random.randint(0, samples.shape[0], draws):
                 tmp = self._populate_dictionary(samples[idx], verified_params)
@@ -786,6 +790,7 @@ class rotationmap:
             return collapse_func(models, axis=0)
 
         # Take a percentile of the samples.
+
         elif isinstance(draws, float):
             tmp = np.percentile(samples, draws, axis=0)
             tmp = self._populate_dictionary(tmp, verified_params)
@@ -796,6 +801,91 @@ class rotationmap:
 
         else:
             raise ValueError("'draws' must be a float or integer.")
+
+    def mirror_residual(self, samples, params, mirror_velocity_residual=True,
+                        mirror_axis='minor', return_deprojected=False,
+                        deprojected_dpix_scale=1.0):
+        """
+        Return the residuals after subtracting a mirror image of either the
+        rotation map, as in Huang et al. 2018, or the residuals, as in
+        Izquierdo et al. 2021.
+
+        .. _Huang et al. 2018: https://ui.adsabs.harvard.edu/abs/2018ApJ...867....3H/abstract
+        .. _Izquierdo et al. 2021: https://ui.adsabs.harvard.edu/abs/2021arXiv210409530V/abstract
+
+        Args:
+            samples (ndarray): An array of samples returned from ``fit_map``.
+            params (dict): The parameter dictionary passed to ``fit_map``.
+            mirror_velocity_residual (Optional[bool]): If ``True``, the
+                default, mirror the velocity residuals, otherwise use the line
+                of sight velocity corrected for the systemic velocity.
+            mirror_axis (Optional[str]): Which axis to mirror the image along,
+                either ``'minor'`` or ``'major'``.
+            return_deprojected (Optional[bool]): If ``True``, return the
+                deprojected image, or, if ``False``, reproject the data onto
+                the sky.
+
+        Returns:
+            x, y, residual (array, array, array): The x- and y-axes of the
+                residual (either the sky axes or deprojected, depending on the
+                chosen arguments) and the residual.
+        """
+
+        # Calculate the image to mirror.
+
+        if mirror_velocity_residual:
+            to_mirror = self.data * 1e3 - self.evaluate_models(samples, params)
+        else:
+            to_mirror = self.data.copy() * 1e3
+            if isinstance(type(params['vlsr']), int):
+                to_mirror -= params['vlsr']
+            else:
+                to_mirror -= np.median(samples, axis=0)[params['vlsr']]
+
+        # Generate the axes for the deprojected image.
+
+        r, t, _ = self.evaluate_models(samples, params, coords_only=True)
+        t += np.pi / 2.0 if mirror_axis.lower() == 'minor' else 0.0
+        x = np.nanmax(np.where(np.isfinite(to_mirror), r, np.nan))
+        x = np.arange(-x, x, deprojected_dpix_scale * self.dpix)
+        x -= 0.5 * (x[0] + x[-1])
+
+        xs = (r * np.cos(t)).flatten()
+        ys = (r * np.sin(t)).flatten()
+
+        # Deproject the image.
+
+        from scipy.interpolate import griddata
+        d = griddata((xs, ys), to_mirror.flatten(), (x[:, None], x[None, :]))
+
+        # Either subtract or add the mirrored image. Only want to add when
+        # mirroring the line-of-sight velocity and mirroring about the minor
+        # axis.
+
+        if not mirror_velocity_residual and mirror_axis == 'minor':
+            d += d[:, ::-1]
+        else:
+            d -= d[:, ::-1]
+
+        if return_deprojected:
+            return x, x, d
+
+        # Reproject the residuals onto the sky plane.
+
+        dd = d.flatten()
+        mask = np.isfinite(dd)
+        xx, yy = np.meshgrid(x, x)
+        xx, yy = xx.flatten(), yy.flatten()
+        xx, yy, dd = xx[mask], yy[mask], dd[mask]
+
+        from scipy.interpolate import interp2d
+
+        f = interp2d(xx, yy, dd, kind='linear')
+        f = np.squeeze([f(xd, yd) for xd, yd in zip(xs, ys)])
+        f = f.reshape(to_mirror.shape)
+        f = np.where(np.isfinite(to_mirror), f, np.nan)
+
+        return self.xaxis, self.yaxis, f
 
     # -- Deprojection Functions -- #
 
@@ -1245,6 +1335,51 @@ class rotationmap:
     @property
     def extent(self):
         return [self.xaxis[0], self.xaxis[-1], self.yaxis[0], self.yaxis[-1]]
+
+    def plot_model(self, model, levels=None, cb_label=None, return_fig=False,
+                   contourf_kwargs=None):
+        """
+        Plot a v0 model using the same scalings as the plot_data() function.
+
+        Args:
+            model (array): Model to plot in [km/s].
+            levels (optional[list]): List of contour levels to use. If none
+                provided, will default to the default of ``plot_data()``.
+            cb_label (optional[str]): Colorbar label.
+            return_fig (optional[bool]): Return the figure.
+            contourf_kwargs (optional[dict]): Dictionary of contourf kwargs.
+
+        Returns:
+            fig (Matplotlib figure): If ``return_fig`` is ``True``. Can access
+                the axes through ``fig.axes`` for additional plotting.
+        """
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots()
+
+        if levels is None:
+            levels = np.nanpercentile(self.data, [2, 98]) - self.vlsr
+            levels = max(abs(levels[0]), abs(levels[1]))
+            levels = self.vlsr + np.linspace(-levels, levels, 30)
+
+        contourf_kwargs = {} if contourf_kwargs is None else contourf_kwargs
+        contourf_kwargs['levels'] = levels
+        contourf_kwargs['extend'] = contourf_kwargs.pop('extend', 'both')
+        contourf_kwargs['zorder'] = contourf_kwargs.pop('zorder', -9)
+        contourf_kwargs['cmap'] = contourf_kwargs.pop('cmap',
+                                                      rotationmap.colormap())
+        im = ax.contourf(self.xaxis, self.yaxis, model, **contourf_kwargs)
+
+        if cb_label is None:
+            cb_label = r'${\rm v_{0} \quad (km\,s^{-1})}$'
+        if cb_label != '':
+            cb = plt.colorbar(im, pad=0.03, format='%.2f')
+            cb.set_label(cb_label, rotation=270, labelpad=15)
+            cb.minorticks_on()
+
+        self._gentrify_plot(ax)
+
+        if return_fig:
+            return fig
 
     def _plot_bestfit(self, params, ivar=None, residual=False,
                       return_ax=False):
