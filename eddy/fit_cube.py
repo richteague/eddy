@@ -807,8 +807,8 @@ class rotationmap:
                         deprojected_dpix_scale=1.0):
         """
         Return the residuals after subtracting a mirror image of either the
-        rotation map, as in Huang et al. 2018, or the residuals, as in
-        Izquierdo et al. 2021.
+        rotation map, as in _Huang et al. 2018, or the residuals, as in
+        _Izquierdo et al. 2021.
 
         .. _Huang et al. 2018: https://ui.adsabs.harvard.edu/abs/2018ApJ...867....3H/abstract
         .. _Izquierdo et al. 2021: https://ui.adsabs.harvard.edu/abs/2021arXiv210409530V/abstract
