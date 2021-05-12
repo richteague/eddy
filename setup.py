@@ -8,7 +8,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name="astro-eddy",
-    version="1.3.6",
+    version="1.3.8",
     author="Richard Teague",
     author_email="richard.d.teague@cfa.harvard.edu",
     description=("Tools to recover expectionally precise rotation curves from "
@@ -24,6 +24,7 @@ setup(
         "matplotlib>=3",
         "emcee>=3",
         "corner>=2",
+        "zeus-mcmc",
         ],
     classifiers=[
         "Programming Language :: Python :: 3.5",

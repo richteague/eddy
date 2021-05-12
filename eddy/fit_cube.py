@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import time
+import zeus
 import emcee
 import numpy as np
 from astropy.io import fits
@@ -36,6 +37,7 @@ class rotationmap:
         y0 (optional[float]): Recenter the image to this offset.
         unit (optional[str]): Unit of the input data cube. By deafult
             assumed to be [m/s].
+        mcmc (optional[str]): Which MCMC package to use to sample posteriors.
     """
 
     msun = 1.988e30
@@ -44,7 +46,7 @@ class rotationmap:
     priors = {}
 
     def __init__(self, path, uncertainty=None, FOV=None, downsample=None,
-                 x0=0.0, y0=0.0, unit='m/s', clip=None):
+                 x0=0.0, y0=0.0, unit='m/s', mcmc='emcee'):
         # Read in the data and position axes.
         self.path = path
         self.data = np.squeeze(fits.getdata(path))
@@ -88,9 +90,6 @@ class rotationmap:
                 downsample = int(np.ceil(self.bmaj / self.dpix))
             self._downsample_cube(downsample)
             self.dpix = abs(np.diff(self.xaxis)).mean()
-        if clip is not None:
-            print("WARNING: `clip` is being depreciate. Use `FOV` instead.")
-            FOV = 2.0 * clip
         if FOV is not None:
             self._clip_cube(FOV / 2.0)
         self.nypix = self.yaxis.size
@@ -108,6 +107,9 @@ class rotationmap:
         self.shadowed_extend = 1.5
         self.shadowed_oversample = 2.0
         self.shadowed_method = 'nearest'
+
+        # Set the MCMC package, defaults to emcee.
+        self._mcmc = 'emcee'
 
     def fit_map(self, p0, params, r_min=None, r_max=None, optimize=True,
                 nwalkers=None, nburnin=300, nsteps=100, scatter=1e-3,
@@ -168,8 +170,8 @@ class rotationmap:
                 ``'bestfit'``, ``'residual'``, or ``'none'`` if no plots are to
                 be plotted. By default, all are plotted.
             returns (optional[list]): List of items to return. Can contain
-                ``'samples'``, ``'percentiles'``, ``'dict'``, ``'model'``,
-                ``'residuals'`` or ``'none'``. By default only
+                ``'samples'``, ``'sampler'``, ``'percentiles'``, ``'dict'``,
+                ``'model'``, ``'residuals'`` or ``'none'``. By default only
                 ``'percentiles'`` are returned.
             pool (optional): An object with a `map` method.
             emcee_kwargs (Optional[dict]): Dictionary to pass to the emcee
@@ -227,12 +229,6 @@ class rotationmap:
         if optimize:
             p0 = self._optimize_p0(p0, params_tmp)
 
-        # Make the mask for fitting.
-
-        temp = rotationmap._populate_dictionary(p0, params_tmp)
-        temp = self.verify_params_dictionary(temp)
-        self.ivar = self._calc_ivar(temp)
-
         # Set up and run the MCMC with emcee.
 
         time.sleep(0.5)
@@ -240,6 +236,12 @@ class rotationmap:
         emcee_kwargs = {} if emcee_kwargs is None else emcee_kwargs
         emcee_kwargs['scatter'], emcee_kwargs['pool'] = scatter, pool
         for n in range(int(niter)):
+
+            # Make the mask for fitting.
+
+            temp = rotationmap._populate_dictionary(p0, params_tmp)
+            temp = self.verify_params_dictionary(temp)
+            self.ivar = self._calc_ivar(temp)
 
             # Run the sampler.
 
@@ -251,7 +253,10 @@ class rotationmap:
 
             # Split off the samples.
 
-            samples = sampler.chain[:, -int(nsteps):]
+            if self._mcmc == 'emcee':
+                samples = sampler.chain[:, -int(nsteps):]
+            else:
+                samples = sampler.chain[-int(nsteps):]
             samples = samples.reshape(-1, samples.shape[-1])
             p0 = np.median(samples, axis=0)
             medians = rotationmap._populate_dictionary(p0, params.copy())
@@ -267,7 +272,11 @@ class rotationmap:
         if 'mask' in plots:
             self.plot_data(ivar=self.ivar)
         if 'walkers' in plots:
-            rotationmap._plot_walkers(sampler.chain.T, nburnin, labels)
+            if self._mcmc == 'emcee':
+                walkers = sampler.chain.T
+            else:
+                walkers = np.rollaxis(sampler.chain.copy(), 2)
+            rotationmap._plot_walkers(walkers, nburnin, labels)
         if 'corner' in plots:
             rotationmap._plot_corner(samples, labels)
         if 'bestfit' in plots:
@@ -287,6 +296,8 @@ class rotationmap:
             return None
         if 'samples' in returns:
             to_return += [samples]
+        if 'sampler' in returns:
+            to_return += [sampler]
         if 'lnprob' in returns:
             to_return += [sampler.lnprobability[nburnin:]]
         if 'percentiles' in returns:
@@ -531,16 +542,27 @@ class rotationmap:
 
     def _run_mcmc(self, p0, params, nwalkers, nburnin, nsteps, **kwargs):
         """Run the MCMC sampling. Returns the sampler."""
-        p0 = self._random_p0(p0, kwargs.pop('scatter', 1e-3), nwalkers)
-        sampler = emcee.EnsembleSampler(nwalkers, p0.shape[1],
-                                        self._ln_probability,
-                                        args=[params, np.nan],
-                                        **kwargs)
-        if emcee.__version__ >= '3':
-            progress = kwargs.pop('progress', True)
-            sampler.run_mcmc(p0, nburnin + nsteps, progress=progress)
+
+        if self._mcmc == 'zeus':
+            EnsembleSampler = zeus.EnsembleSampler
         else:
-            sampler.run_mcmc(p0, nburnin + nsteps)
+            EnsembleSampler = emcee.EnsembleSampler
+
+        p0 = self._random_p0(p0, kwargs.pop('scatter', 1e-3), nwalkers)
+        moves = kwargs.pop('moves', None)
+        pool = kwargs.pop('pool', None)
+
+        sampler = EnsembleSampler(nwalkers,
+                                  p0.shape[1],
+                                  self._ln_probability,
+                                  args=[params, np.nan],
+                                  moves=moves,
+                                  pool=pool)
+
+        progress = kwargs.pop('progress', True)
+
+        sampler.run_mcmc(p0, nburnin + nsteps, progress=progress, **kwargs)
+
         return sampler
 
     @staticmethod
