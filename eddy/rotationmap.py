@@ -44,6 +44,7 @@ class rotationmap(datacube):
             self._downsample_cube(downsample)
         self.mask = np.isfinite(self.data)
         self.vlsr = np.nanmedian(self.data)
+        self.vlsr_kms = self.vlsr / 1e3
         self._set_default_priors()
 
     # -- FITTING FUNCTIONS -- #
@@ -55,9 +56,8 @@ class rotationmap(datacube):
         """
         Fit a rotation profile to the data. Note that for a disk with
         a non-zero height, the sign of the inclination dictates the direction
-        of the tilt: a positive tilt rotates the disk about around the x-axis
-        such that the southern side of the disk is closer to the observer. The
-        same definition is used for the warps.
+        of rotation: a positive inclination denotes a clockwise rotation, while
+        a negative inclination denotes an anti-clockwise rotation.
 
         The function must be provided with a dictionary of parameters,
         ``params`` where key is the parameter and its value is either the fixed
@@ -168,9 +168,13 @@ class rotationmap(datacube):
         # Set up and run the MCMC with emcee.
 
         time.sleep(0.5)
-        nwalkers = 2 * p0.size if nwalkers is None else nwalkers
+        nsteps = np.atleast_1d(nsteps)
+        nburnin = np.atleast_1d(nburnin)
+        nwalkers = np.atleast_1d(nwalkers)
+
         mcmc_kwargs = {} if mcmc_kwargs is None else mcmc_kwargs
         mcmc_kwargs['scatter'], mcmc_kwargs['pool'] = scatter, pool
+
         for n in range(int(niter)):
 
             # Make the mask for fitting.
@@ -182,17 +186,20 @@ class rotationmap(datacube):
             # Run the sampler.
 
             sampler = self._run_mcmc(p0=p0, params=params_tmp,
-                                     nwalkers=nwalkers, nburnin=nburnin,
-                                     nsteps=nsteps, mcmc=mcmc, **mcmc_kwargs)
+                                     nwalkers=nwalkers[n % nwalkers.size],
+                                     nburnin=nburnin[n % nburnin.size],
+                                     nsteps=nsteps[n % nsteps.size],
+                                     mcmc=mcmc, **mcmc_kwargs)
+
             if type(params_tmp['PA']) is int:
                 sampler.chain[:, :, params_tmp['PA']] %= 360.0
 
             # Split off the samples.
 
             if mcmc == 'emcee':
-                samples = sampler.chain[:, -int(nsteps):]
+                samples = sampler.chain[:, -int(nsteps[n % nsteps.size]):]
             else:
-                samples = sampler.chain[-int(nsteps):]
+                samples = sampler.chain[-int(nsteps[n % nsteps.size]):]
             samples = samples.reshape(-1, samples.shape[-1])
             p0 = np.median(samples, axis=0)
             medians = rotationmap._populate_dictionary(p0, params.copy())
@@ -210,7 +217,7 @@ class rotationmap(datacube):
                 walkers = sampler.chain.T
             else:
                 walkers = np.rollaxis(sampler.chain.copy(), 2)
-            rotationmap._plot_walkers(walkers, nburnin, labels)
+            rotationmap._plot_walkers(walkers, nburnin[-1], labels)
         if 'corner' in plots:
             rotationmap._plot_corner(samples, labels)
         if 'bestfit' in plots:
@@ -396,6 +403,7 @@ class rotationmap(datacube):
         """Set the default priors."""
 
         # Basic Geometry.
+
         self.set_prior('x0', [-0.5, 0.5], 'flat')
         self.set_prior('y0', [-0.5, 0.5], 'flat')
         self.set_prior('inc', [-90.0, 90.0], 'flat')
@@ -405,6 +413,7 @@ class rotationmap(datacube):
                                 np.nanmax(self.data)], 'flat')
 
         # Emission Surface
+
         self.set_prior('z0', [0.0, 5.0], 'flat')
         self.set_prior('psi', [0.0, 5.0], 'flat')
         self.set_prior('r_cavity', [0.0, 1e30], 'flat')
@@ -412,11 +421,13 @@ class rotationmap(datacube):
         self.set_prior('q_taper', [0.0, 5.0], 'flat')
 
         # Warp
+
         self.set_prior('w_i', [-90.0, 90.0], 'flat')
         self.set_prior('w_r', [0.0, self.xaxis.max()], 'flat')
         self.set_prior('w_t', [-180.0, 180.0], 'flat')
 
         # Velocity Profile
+
         self.set_prior('vp_100', [0.0, 1e4], 'flat')
         self.set_prior('vp_q', [-2.0, 0.0], 'flat')
         self.set_prior('vp_rtaper', [0.0, 1e30], 'flat')
@@ -581,7 +592,7 @@ class rotationmap(datacube):
 
         return params
 
-    def evaluate_models(self, samples, params, draws=0.5,
+    def evaluate_models(self, samples=None, params=None, draws=0.5,
                         collapse_func=np.mean, coords_only=False):
         """
         Evaluate models based on the samples provided and the parameter
@@ -611,6 +622,17 @@ class rotationmap(datacube):
         """
 
         # Check the input.
+
+        if params is None:
+            raise ValueError("Must provide model parameters dictionary.")
+
+        # Model is fully specified.
+
+        if samples is None:
+            if coords_only:
+                return self.disk_coords(**params.copy())
+            else:
+                return self._make_model(params.copy())
 
         nparam = np.sum([isinstance(params[k], int) for k in params.keys()])
         if samples.shape[1] != nparam:
@@ -785,6 +807,26 @@ class rotationmap(datacube):
         if params['beam']:
             v0 = datacube._convolve_image(v0, self._beamkernel())
         return v0
+
+    def deproject_model_residuals(self, samples, params):
+        """
+        Deproject the residuals into cylindrical velocity components. Takes the
+        median value of the samples to determine the model.
+
+        Args:
+            samples (ndarray): An array of samples returned from ``fit_map``.
+            params (dict): The parameter dictionary passed to ``fit_map``.
+        """
+        median_samples = np.median(samples, axis=0)
+        verified_params = self.verify_params_dictionary(params.copy())
+        model = self._populate_dictionary(median_samples, verified_params)
+        v_res = self.data - self._make_model(model)
+        rvals, tvals, zvals = self.disk_coords(**model)
+        v_p = v_res / np.cos(tvals) / np.sin(-np.radians(model['inc']))
+        v_r = v_res / np.sin(tvals) / np.sin(abs(np.radians(model['inc'])))
+        v_z = v_res / np.cos(abs(np.radians(model['inc'])))
+        v_z = np.where(zvals >= 0.0, -v_z, v_z)
+        return v_p, v_r, v_z
 
     # -- Functions to help determine the emission height. -- #
 
@@ -1076,10 +1118,12 @@ class rotationmap(datacube):
         # Make the model and calculate the plotting limits.
 
         if model is None:
-            model = self.evaluate_models(samples, params, draws=0.5,
-                                         collapse_func=np.mean)
+            model = self.evaluate_models(samples=samples, params=params.copy())
+            model /= 1e3
         vmin, vmax = np.nanpercentile(model, [2, 98])
-        vmax = max(abs(vmin - self.vlsr), abs(vmax - self.vlsr))
+        vmax = max(abs(vmin - self.vlsr_kms), abs(vmax - self.vlsr_kms))
+        vmin = self.vlsr_kms - vmax
+        vmax = self.vlsr_kms + vmax
 
         # Initialize the plotting parameters.
 
@@ -1088,8 +1132,8 @@ class rotationmap(datacube):
         imshow_kwargs['zorder'] = imshow_kwargs.pop('zorder', -9)
         imshow_kwargs['extent'] = self.extent
         imshow_kwargs['origin'] = 'lower'
-        imshow_kwargs['vmin'] = imshow_kwargs.pop('vmin', self.vlsr - vmax)
-        imshow_kwargs['vmax'] = imshow_kwargs.pop('vmax', self.vlsr + vmax)
+        imshow_kwargs['vmin'] = imshow_kwargs.pop('vmin', vmin)
+        imshow_kwargs['vmax'] = imshow_kwargs.pop('vmax', vmax)
         im = ax.imshow(model, **imshow_kwargs)
 
         # Overplot the mask if necessary.
@@ -1141,7 +1185,7 @@ class rotationmap(datacube):
         # Make the model and calculate the plotting limits.
 
         if model is None:
-            model = self.evaluate_models(samples, params)
+            model = self.evaluate_models(samples=samples, params=params.copy())
         vres = self.data - model
         mask = np.ones(vres.shape) if mask is None else mask
         masked_vres = np.where(mask, vres, np.nan)
@@ -1177,7 +1221,7 @@ class rotationmap(datacube):
             return fig
 
     def plot_model_surface(self, samples, params, plot_surface_kwargs=None,
-                           return_fig=True):
+                           mask_with_data=True, return_fig=True):
         """
         Overplot the emission surface onto the provided axis. Takes the median
         value of the samples as the model to plot.
@@ -1185,8 +1229,10 @@ class rotationmap(datacube):
         Args:
             samples (ndarray): An array of samples returned from ``fit_map``.
             params (dict): The parameter dictionary passed to ``fit_map``.
-            plot_surface_kwargs (dict): Dictionary of kwargs to pass to
-                ``plot_surface``.
+            plot_surface_kwargs (Optional[dict]): Dictionary of kwargs to pass
+                to ``plot_surface``.
+            mask_with_data (Optional[bool]): If ``True``, mask the surface to
+                regions where the data is finite valued.
             return_fig (Optional[bool]): Return the figure.
 
         Returns:
@@ -1202,13 +1248,19 @@ class rotationmap(datacube):
             raise ValueError(warning.format(nparam))
         if plot_surface_kwargs is None:
             plot_surface_kwargs = {}
+        plot_surface_kwargs['return_fig'] = True
 
         # Populate the model with the median values.
 
         model = self.verify_params_dictionary(params.copy())
         model = self._populate_dictionary(np.median(samples, axis=0), model)
+        model['mask'] = np.isfinite(self.data) if mask_with_data else None
         model.pop('r_max')
-        self.plot_surface(**model, **plot_surface_kwargs)
+        fig = self.plot_surface(**model, **plot_surface_kwargs)
+        self._gentrify_plot(ax=fig.axes[0])
+
+        if return_fig:
+            return fig
 
     def plot_disk_axes(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, major=1.0,
                        ax=None, plot_kwargs=None, return_ax=True):

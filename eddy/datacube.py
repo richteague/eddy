@@ -661,7 +661,7 @@ class datacube(object):
     def plot_surface(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=None, psi=None,
                      r_cavity=None, r_taper=None, q_taper=None, w_i=None,
                      w_r=None, w_t=None, z_func=None, w_func=None,
-                     shadowed=False, r_max=None, fill=None, ax=None,
+                     shadowed=False, r_max=None, mask=None, fill=None, ax=None,
                      contour_kwargs=None, imshow_kwargs=None, return_fig=True,
                      **_):
         """
@@ -686,8 +686,9 @@ class datacube(object):
                 center.
             w_r (Optional[float]): Scale radius of the warp in [arcsec].
             w_t (Optional[float]): Angle of nodes of the warp in [degrees].
-            r_min (Optional[float]): Inner radius to plot, default is 0.
             r_max (Optional[float]): Outer radius to plot.
+            mask (Optional[array]): A 2D mask to define where the surcace is
+                plotted.
             ntheta (Optional[int]): Number of theta contours to plot.
             nrad (Optional[int]): Number of radial contours to plot.
             mask (Optional[array]): Mask used to define regions where the
@@ -722,6 +723,13 @@ class datacube(object):
         tvals = np.where(rvals <= r_max, tvals, np.nan)
         tvals = np.where(rvals >= 0.5 * self.bmaj, tvals, np.nan)
         rvals = np.where(rvals <= r_max, rvals, np.nan)
+
+        # Mask the data based on user-defined mask.
+
+        if mask is not None:
+            rvals = np.where(mask, rvals, np.nan)
+            tvals = np.where(mask, tvals, np.nan)
+            zvals = np.where(mask, zvals, np.nan)
 
         # Fill in the background.
 

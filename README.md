@@ -21,7 +21,7 @@ If things have installed correctly you should be able to run the [Jupyter Notebo
 
 ## Useage
 
-For guides on how to use `eddy` you will find extensive examples in the [documents](https://github.com/richteague/eddy/tree/master/docs). We shameless recommend [bettermoments](https://github.com/richteague/bettermoments) to make the moment maps required for the fitting.
+For guides on how to use `eddy` you will find extensive examples in the [documents](https://github.com/richteague/eddy/tree/master/docs). We shamelessly recommend [bettermoments](https://github.com/richteague/bettermoments) to make the moment maps required for the fitting.
 
 ## Attribution
 
@@ -44,3 +44,7 @@ If you use `eddy` as part of your research, please cite the [JOSS article](http:
 ```
 
 A full list of citations including dependencies can be found on the [citations](./docs/citations.md) page.
+
+## Works using `eddy`
+
+A list of the works using (or at least citing) `eddy` can be found on [ads](https://ui.adsabs.harvard.edu/abs/2019JOSS....4.1220T/citations).
