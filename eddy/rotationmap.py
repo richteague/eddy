@@ -1119,8 +1119,8 @@ class rotationmap(datacube):
 
         if model is None:
             model = self.evaluate_models(samples=samples, params=params.copy())
-            model /= 1e3
-        vmin, vmax = np.nanpercentile(model, [2, 98])
+        model_kms = model.copy() / 1e3
+        vmin, vmax = np.nanpercentile(model_kms, [2, 98])
         vmax = max(abs(vmin - self.vlsr_kms), abs(vmax - self.vlsr_kms))
         vmin = self.vlsr_kms - vmax
         vmax = self.vlsr_kms + vmax
@@ -1134,7 +1134,7 @@ class rotationmap(datacube):
         imshow_kwargs['origin'] = 'lower'
         imshow_kwargs['vmin'] = imshow_kwargs.pop('vmin', vmin)
         imshow_kwargs['vmax'] = imshow_kwargs.pop('vmax', vmax)
-        im = ax.imshow(model, **imshow_kwargs)
+        im = ax.imshow(model_kms, **imshow_kwargs)
 
         # Overplot the mask if necessary.
 

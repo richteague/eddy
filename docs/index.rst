@@ -35,8 +35,7 @@ Contents
 .. toctree::
    :maxdepth: 2
    :caption: Documentation
-
-   user/annulus
+   
    user/rotationmap
 
 .. toctree::
