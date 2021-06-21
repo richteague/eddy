@@ -1118,12 +1118,11 @@ class rotationmap(datacube):
         # Make the model and calculate the plotting limits.
 
         if model is None:
-            model = self.evaluate_models(samples=samples, params=params.copy())
-        model_kms = model.copy() / 1e3
-        vmin, vmax = np.nanpercentile(model_kms, [2, 98])
-        vmax = max(abs(vmin - self.vlsr_kms), abs(vmax - self.vlsr_kms))
-        vmin = self.vlsr_kms - vmax
-        vmax = self.vlsr_kms + vmax
+            model = self.evaluate_models(samples, params.copy())
+        vmin, vmax = np.nanpercentile(model, [2, 98])
+        vmax = max(abs(vmin - self.vlsr), abs(vmax - self.vlsr))
+        vmin = self.vlsr - vmax
+        vmax = self.vlsr + vmax
 
         # Initialize the plotting parameters.
 
@@ -1134,7 +1133,7 @@ class rotationmap(datacube):
         imshow_kwargs['origin'] = 'lower'
         imshow_kwargs['vmin'] = imshow_kwargs.pop('vmin', vmin)
         imshow_kwargs['vmax'] = imshow_kwargs.pop('vmax', vmax)
-        im = ax.imshow(model_kms, **imshow_kwargs)
+        im = ax.imshow(model, **imshow_kwargs)
 
         # Overplot the mask if necessary.
 
@@ -1145,7 +1144,7 @@ class rotationmap(datacube):
                         [-1.0, 0.0], colors='k', alpha=0.5)
 
         if cb_label is None:
-            cb_label = r'${\rm v_{0} \quad (km\,s^{-1})}$'
+            cb_label = r'${\rm v_{0} \quad (m\,s^{-1})}$'
         if cb_label != '':
             cb = plt.colorbar(im, pad=0.03, format='%.2f', extend='both')
             cb.set_label(cb_label, rotation=270, labelpad=15)
