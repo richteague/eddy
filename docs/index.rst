@@ -35,7 +35,7 @@ Contents
 .. toctree::
    :maxdepth: 2
    :caption: Documentation
-   
+
    user/rotationmap
 
 .. toctree::
@@ -44,6 +44,7 @@ Contents
 
    tutorials/tutorial_1
    tutorials/tutorial_2
+   tutorials/tutorial_3
 
 
 Support

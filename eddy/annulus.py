@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
 
+import zeus
+import emcee
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
+from .helper_functions import plot_walkers, plot_corner, random_p0
 from scipy.stats import binned_statistic
 from scipy.optimize import curve_fit
 from scipy.optimize import minimize
@@ -33,59 +37,68 @@ class annulus(object):
         suppress_warnings (optional[bool]): If ``True``, suppress all warnings.
     """
 
-    def __init__(self, spectra, theta, velax, remove_empty=True,
-                 sort_spectra=True, suppress_warnings=True):
-
-        # Suppress warnings.
-        if suppress_warnings:
-            import warnings
-            warnings.filterwarnings("ignore")
+    def __init__(self, spectra, pvals, rvals, velax,
+                 remove_empty=True, sort_spectra=True):
 
         # Read in the spectra and remove bad values.
-        self.theta = theta
+
+        self.theta = pvals
+        self.rvals = rvals
         self.spectra = spectra
+        self.rms = self._estimate_RMS()
 
         # Sort the spectra.
+
         if sort_spectra:
             idxs = np.argsort(self.theta)
             self.spectra = self.spectra[idxs]
             self.theta = self.theta[idxs]
 
         # Remove empty pixels.
+
         if remove_empty:
             idxa = np.sum(self.spectra, axis=-1) != 0.0
             idxb = np.std(self.spectra, axis=-1) != 0.0
             idxs = idxa & idxb
             self.theta = self.theta[idxs]
             self.spectra = self.spectra[idxs]
-
-        # Easier to use variables.
-        self.theta_deg = np.degrees(self.theta)
-        self.spectra_flat = self.spectra.flatten()
-
-        # Check there's actually spectra.
         if self.theta.size < 1:
             raise ValueError("No finite spectra. Check for NaNs.")
 
+        # Easier to use variables.
+
+        self.theta_deg = np.degrees(self.theta)
+        self.spectra_flat = self.spectra.flatten()
+
         # Velocity axis.
+
         self.velax = velax
-        self.channel = np.diff(velax)[0]
-        self.velax_range = (self.velax[0] - 0.5 * self.channel,
-                            self.velax[-1] + 0.5 * self.channel)
+        self.chan = np.diff(velax)[0]
+        self.velax_range = (self.velax[0] - 0.5 * self.chan,
+                            self.velax[-1] + 0.5 * self.chan)
         self.velax_mask = np.array([self.velax[0], self.velax[-1]])
 
         # Check the shapes are compatible.
+
         if self.spectra.shape[0] != self.theta.size:
             raise ValueError("Mismatch in number of angles and spectra.")
         if self.spectra.shape[1] != self.velax.size:
             raise ValueError("Mismatch in the spectra and velocity axis.")
+
+        # Define an empty grid to interpolate the data for plotting.
+        # TODO: Check if there's a reasonable way for the user to change this.
+
+        self.theta_grid = np.linspace(-np.pi, np.pi, 100)
+        self.velax_grid = np.linspace(self.velax.min(), self.velax.max(), 100)
+        self.spectra_grid = None
 
     # -- Measure the Velocity -- #
 
     def get_vlos(self, p0=None, fit_method='GP', fit_vrad=False,
                  resample=False, optimize=True, nwalkers=32, nburnin=500,
                  nsteps=500, scatter=1e-3, signal='int', optimize_kwargs=None,
-                 plots=None, returns=None):
+                 plots=None, returns=None, mcmc='emcee', mcmc_kwargs=None,
+                 centroid_method='quadratic'):
         """
         Infer the requested velocities by shifting lines back to a common
         center and stacking. The quality of fit is given by the selected
@@ -104,7 +117,7 @@ class annulus(object):
 
         Args:
             fit_method (optional[str]): Method used to define the quality of
-                fit. Must be one of ``'GP'``, ``'dV'`` or ``SNR``.
+                fit. Must be one of ``'GP'``, ``'dV'``, ``'SNR'`` or ``'SHO'``.
             p0 (optional[list]): Starting positions for the minimization. If
                 nothing is provided these will be guessed but this may not
                 result in very good starting positions.
@@ -135,7 +148,7 @@ class annulus(object):
 
         # Check the input variables.
         fit_method = fit_method.lower()
-        if fit_method not in ['dv', 'gp', 'snr']:
+        if fit_method not in ['dv', 'gp', 'snr', 'sho']:
             raise ValueError("method must be 'dV', 'GP' or 'SNR'.")
         if fit_method == 'gp' and not celerite_installed:
             raise ImportError("Must install 'celerite' to use GP method.")
@@ -146,8 +159,9 @@ class annulus(object):
                                     nwalkers=nwalkers, nsteps=nsteps,
                                     nburnin=nburnin, scatter=scatter,
                                     plots=plots, returns=returns,
-                                    resample=resample,
-                                    optimize_kwargs=optimize_kwargs)
+                                    resample=resample, mcmc=mcmc,
+                                    optimize_kwargs=optimize_kwargs,
+                                    mcmc_kwargs=mcmc_kwargs)
 
         elif fit_method == 'dv':
             return self._fitting_dV(p0=p0, fit_vrad=fit_vrad,
@@ -159,11 +173,18 @@ class annulus(object):
                                      resample=resample, signal=signal,
                                      optimize_kwargs=optimize_kwargs)
 
+        elif fit_method == 'sho':
+            popt, cvar = self.fit_SHO(p0=p0, fit_vrad=fit_vrad,
+                                      centroid_method=centroid_method,
+                                      optimize_kwargs=optimize_kwargs)
+            return popt[:(1 + int(fit_vrad))], cvar[:(1 + int(fit_vrad))]
+
     # -- Gaussian Processes Approach -- #
 
     def _fitting_GP(self, p0=None, fit_vrad=False, optimize=False, nwalkers=64,
                     nburnin=50, nsteps=100, resample=False, scatter=1e-3,
-                    plots=None, returns=None, optimize_kwargs=None):
+                    niter=1, plots=None, returns=None, mcmc='emcee',
+                    optimize_kwargs=None, mcmc_kwargs=None):
         """
         Wrapper for the GP fitting.
 
@@ -187,40 +208,85 @@ class annulus(object):
         """
 
         # Starting positions.
+
         if p0 is None:
             p0 = self._guess_parameters_GP(fit=True)
             if not fit_vrad:
                 p0 = np.concatenate([p0[:1], p0[-3:]])
         p0 = np.atleast_1d(p0)
 
+        # Define the parameter labels.
+
+        labels = [r'$v_{\rm \phi,\, proj}$']
+        if fit_vrad:
+            labels += [r'$v_{\rm r,\, proj}$']
+        labels += [r'$\sigma_{\rm rms}}$']
+        labels += [r'${\rm ln(\sigma)}$']
+        labels += [r'${\rm ln(\rho)}$']
+
         # Check for NaNs in the starting values.
+
         if np.any(np.isnan(p0)):
             raise ValueError("WARNING: NaNs in the p0 array.")
 
         # Optimize the starting positions.
+
         if optimize:
             if optimize_kwargs is None:
                 optimize_kwargs = {}
             p0 = self._optimize_p0_GP(p0, N=int(optimize), resample=resample,
                                       **optimize_kwargs)
-        p0 = annulus._randomize_p0(p0, nwalkers, scatter)
 
         # Run the sampler
-        import emcee
-        sampler = emcee.EnsembleSampler(nwalkers, p0.shape[1],
-                                        self._lnprobability,
-                                        args=(p0[:, 0].mean(), resample))
-        sampler.run_mcmc(p0, nburnin + nsteps, progress=True)
-        samples = sampler.chain[:, -nsteps:]
-        samples = samples.reshape(-1, samples.shape[-1])
+
+        nsteps = np.atleast_1d(nsteps)
+        nburnin = np.atleast_1d(nburnin)
+        nwalkers = np.atleast_1d(nwalkers)
+        mcmc_kwargs = {} if mcmc_kwargs is None else mcmc_kwargs
+        progress = mcmc_kwargs.pop('progress', True)
+        moves = mcmc_kwargs.pop('moves', None)
+        pool = mcmc_kwargs.pop('pool', None)
+
+        for n in range(int(niter)):
+
+            if mcmc == 'zeus':
+                EnsembleSampler = zeus.EnsembleSampler
+            else:
+                EnsembleSampler = emcee.EnsembleSampler
+
+            p0 = random_p0(p0, scatter, nwalkers[n % nwalkers.size])
+
+            sampler = EnsembleSampler(nwalkers[n % nwalkers.size],
+                                      p0.shape[1],
+                                      self._lnprobability,
+                                      args=(p0[:, 0].mean(), resample),
+                                      moves=moves,
+                                      pool=pool)
+
+            total_steps = nburnin[n % nburnin.size] + nsteps[n % nsteps.size]
+            sampler.run_mcmc(p0, total_steps, progress=progress, **mcmc_kwargs)
+
+            # Split off the burnt in samples.
+
+            if mcmc == 'emcee':
+                samples = sampler.chain[:, -int(nsteps[n % nsteps.size]):]
+            else:
+                samples = sampler.chain[-int(nsteps[n % nsteps.size]):]
+            samples = samples.reshape(-1, samples.shape[-1])
+            p0 = np.median(samples, axis=0)
 
         # Diagnosis plots if appropriate.
+
         plots = ['walkers', 'corner'] if plots is None else plots
         plots = [p.lower() for p in np.atleast_1d(plots)]
         if 'walkers' in plots:
-            annulus._plot_walkers(sampler, nburnin)
+            if mcmc == 'emcee':
+                walkers = sampler.chain.T
+            else:
+                walkers = np.rollaxis(sampler.chain.copy(), 2)
+            plot_walkers(walkers, nburnin[-1], labels, True)
         if 'corner' in plots:
-            annulus._plot_corner(samples)
+            plot_corner(samples, labels)
 
         # Return the requested values.
         returns = ['percentiles'] if returns is None else returns
@@ -508,12 +574,44 @@ class annulus(object):
             The Doppler width of the average stacked spectrum using the
             velocities to align the individual spectra.
         """
-        if fit_vrad:
-            vrot, vrad = theta
-        else:
-            vrot, vrad = theta, 0.0
+        vrot, vrad = theta if fit_vrad else (theta, 0.0)
         x, y = self.deprojected_spectrum(vrot, vrad, resample, scatter=False)
         return annulus._get_gaussian_width(*self._get_masked_spectrum(x, y))
+
+    # -- Rotation Velocity by Fitting a SHO -- #
+
+    def fit_SHO(self, p0=None, fit_vrad=False, centroid_method='quadratic',
+                optimize_kwargs=None):
+        """
+        Infer the rotation velocity by finding velocity which best describes
+        the azimuthal dependence of the line centroid modelled as a simple
+        harmonic oscillator.
+
+        Args:
+            p0 (Optional[list]): Starting positions for the optimization.
+            fit_vrad (Optional[bool]): Whether to include the radial velocity
+                in the fit.
+            centroid_method (Optional[str]): Method used to determine the line
+                centroids, and must be one of ``'quadratic'``, ``'max'`` or
+                ``'gaussian'``.
+            optimize_kwargs (Optional[dict]): Kwargs to pass to ``curve_fit``.
+
+        Returns:
+            pop, cvar (array, array): Arrays of the best-fit parameter values
+            and their uncertainties returned from ``curve_fit``.
+        """
+        v0, dv0 = self.line_centroids(method=centroid_method)
+        assert v0.size == self.theta.size
+        if p0 is None:
+            v_p, v_lsr = 0.5 * (v0.max() - v0.min()), v0.mean()
+            p0 = [v_p, 0.0, v_lsr] if fit_vrad else [v_p, v_lsr]
+        assert len(p0) == 3 if fit_vrad else 2
+        optimize_kwargs = {} if optimize_kwargs is None else optimize_kwargs
+        optimize_kwargs['absolute_sigma'] = True
+        optimize_kwargs['maxfev'] = optimize_kwargs.pop('maxfev', 10000)
+        popt, cvar = curve_fit(annulus._dSHO if fit_vrad else annulus._SHO,
+                               self.theta, v0, sigma=dv0, **optimize_kwargs)
+        return popt, np.diag(cvar)**0.5
 
     # -- Rotation Velocity by Maximizing SNR -- #
 
@@ -626,6 +724,20 @@ class annulus(object):
             SNR = np.trapz((y * w)[mask], x=x[mask])
         return -SNR
 
+    def _estimate_RMS(self, N=15, iterative=False, nsigma=3.0):
+        """Estimate the RMS of the data."""
+        if iterative:
+            std = np.nanmax(self.spectra_flat)
+            for _ in range(5):
+                mask = abs(self.spectra_flat) <= nsigma * std
+                std_new = np.nanstd(self.spectra_flat[mask])
+                if std_new == std or np.isnan(std_new) or std_new == 0.0:
+                    return std
+                std = std_new
+        else:
+            std = np.nanstd([self.spectra[:, :N], self.spectra[:, -N:]])
+        return std
+
     @staticmethod
     def _get_gaussian_width(x, y, fill_value=1e50):
         """Return the absolute width of a Gaussian fit to the spectrum."""
@@ -645,8 +757,11 @@ class annulus(object):
         return x0, dV, Tb
 
     @staticmethod
-    def _fit_gaussian(x, y, dy=None, return_uncertainty=False):
+    def _fit_gaussian(x, y, dy=None, return_uncertainty=None):
         """Fit a gaussian to (x, y, [dy])."""
+        if return_uncertainty is None:
+            return_uncertainty = dy is not None
+        dy = dy * np.ones(x.size) if dy is not None else dy
         try:
             popt, cvar = curve_fit(annulus._gaussian, x, y, sigma=dy,
                                    p0=annulus._get_p0_gaussian(x, y),
@@ -660,8 +775,11 @@ class annulus(object):
         return popt
 
     @staticmethod
-    def _fit_gaussian_thick(x, y, dy=None, return_uncertainty=False):
+    def _fit_gaussian_thick(x, y, dy=None, return_uncertainty=None):
         """Fit an optically thick Gaussian function to (x, y, [dy])."""
+        if return_uncertainty is None:
+            return_uncertainty = dy is not None
+        dy = dy * np.ones(x.size) if dy is not None else dy
         p0 = annulus._fit_gaussian(x=x, y=y, dy=dy, return_uncertainty=False)
         p0 = np.append(p0, 1.0)
         try:
@@ -676,12 +794,16 @@ class annulus(object):
         return popt
 
     @staticmethod
-    def _get_gaussian_center(x, y):
+    def _get_gaussian_center(x, y, dy=None, return_uncertainty=None):
         """Return the line center from a Gaussian fit to the spectrum."""
-        x0 = annulus._fit_gaussian(x, y)[0]
-        if np.isfinite(x0):
-            return abs(x0)
-        return x[np.argmax(y)]
+        if return_uncertainty is None:
+            return_uncertainty = dy is not None
+        popt, cvar = annulus._fit_gaussian(x, y, dy, return_uncertainty=True)
+        if np.isfinite(popt[0]):
+            if return_uncertainty:
+                return popt[0], cvar[0]
+            return popt[0]
+        return x[np.argmax(y)], np.diff(x).mean()
 
     # -- Line Profile Functions -- #
 
@@ -735,8 +857,8 @@ class annulus(object):
         return np.array([np.interp(self.velax, self.velax - dv, spectra)
                          for dv, spectra in zip(vlos, self.spectra)])
 
-    def deprojected_spectrum(self, vrot, vrad=0.0, resample=False,
-                             scatter=False):
+    def deprojected_spectrum(self, vrot, vrad=0.0, resample=True,
+                             scatter=True):
         """
         Returns ``(x, y[, dy])`` of the collapsed and deprojected spectrum
         using the provided velocities to deproject the data. Different methods
@@ -775,7 +897,7 @@ class annulus(object):
         return self._resample_spectra(vpnts, spnts, resample=resample,
                                       scatter=scatter)
 
-    def _line_centroids(self, method='max', spectra=None, velax=None):
+    def line_centroids(self, method='max'):
         """
         Return the velocities of the peak pixels.
 
@@ -786,35 +908,32 @@ class annulus(object):
                 pixel of maximum value and its two neighbouring pixels (see
                 Teague & Foreman-Mackey 2018 for details) and 'gaussian' fits a
                 Gaussian profile to the line.
-            spectra (Optional[ndarray]): The array of spectra to calculate the
-                line centroids on. If nothing is given, use self.spectra. Must
-                be on the same velocity axis.
-            velax (Optional[ndarray]): Must provide the velocity axis if
-                different from the attached array.
 
         Returns:
-            vmax (ndarray): Line centroids.
+            vmax, dvmax (array, array): Line centroids and associated
+                uncertainties.
         """
         method = method.lower()
-        spectra = self.spectra if spectra is None else spectra
-        velax = self.velax if velax is None else velax
         if method == 'max':
-            vmax = np.take(velax, np.argmax(spectra, axis=1))
+            vmax = np.take(self.velax, np.argmax(self.spectra, axis=1))
+            dvmax = np.ones(vmax.size) * self.chan
         elif method == 'quadratic':
             try:
                 from bettermoments.quadratic import quadratic
             except ImportError:
                 raise ImportError("Please install 'bettermoments'.")
-            vmax = [quadratic(spectrum, x0=velax[0], dx=np.diff(velax)[0])[0]
-                    for spectrum in spectra]
-            vmax = np.array(vmax)
+            vmax = np.array([quadratic(s, uncertainty=self.rms,
+                                       x0=self.velax[0], dx=self.chan)
+                             for s in self.spectra]).T
+            vmax, dvmax = vmax[0], vmax[1]
         elif method == 'gaussian':
-            vmax = [annulus._get_gaussian_center(velax, spectrum)
-                    for spectrum in spectra]
-            vmax = np.array(vmax)
+            vmax = [annulus._get_gaussian_center(self.velax, s, self.rms)
+                    for s in self.spectra]
+            vmax, dvmax = np.array(vmax).T
+
         else:
             raise ValueError("method is not 'max', 'gaussian' or 'quadratic'.")
-        return vmax
+        return vmax, dvmax
 
     def _order_spectra(self, vpnts, spnts=None):
         """Return velocity order spectra."""
@@ -894,7 +1013,7 @@ class annulus(object):
             The rotational, radial and systemic velocities all in [m/s].
 
         """
-        vpeaks = self._line_centroids(method=method)
+        vpeaks, _ = self.line_centroids(method=method)
         vlsr = np.mean(vpeaks)
 
         vrot = vpeaks[abs(self.theta).argmin()]
@@ -915,23 +1034,23 @@ class annulus(object):
 
     # -- River Functions -- #
 
-    def _grid_river(self, tgrid=None, vgrid=None, spnts=None, **kwargs):
+    def _interpolate_river(self, spnts):
         """Grid the data to plot as a river."""
         from scipy.interpolate import griddata
-        if tgrid is None:
-            tgrid = np.linspace(self.theta[0], self.theta[-1], self.theta.size)
-        if vgrid is None:
-            vgrid = self.velax
-        if spnts is None:
-            spnts = self.spectra_flat
-        vpnts = (self.velax[None, :] * np.ones(self.spectra.shape)).flatten()
-        tpnts = (self.theta[:, None] * np.ones(self.spectra.shape)).flatten()
-        sgrid = griddata((vpnts, tpnts), spnts.flatten(),
-                         (vgrid[None, :], tgrid[:, None]),
-                         method='nearest', **kwargs)
-        return vgrid, tgrid, np.where(np.isfinite(sgrid), sgrid, 0.0)
+        spnts = np.vstack([spnts[-1:], spnts, spnts[:1]])
+        vpnts = self.velax[None, :] * np.ones(spnts.shape)
+        tpnts = np.concatenate([self.theta[-1:] - 2.0 * np.pi,
+                                self.theta,
+                                self.theta[:1] + 2.0 * np.pi])
+        tpnts = tpnts[:, None] * np.ones(spnts.shape)
+        sgrid = griddata((vpnts.flatten(), tpnts.flatten()), spnts.flatten(),
+                         (self.velax_grid[None, :], self.theta_grid[:, None]),
+                         method='nearest')
+        sgrid = np.where(self.theta_grid[:, None] > tpnts.max(), np.nan, sgrid)
+        sgrid = np.where(self.theta_grid[:, None] < tpnts.min(), np.nan, sgrid)
+        return sgrid
 
-    def plot_river(self, vrot=None, vrad=0.0, residual=False, dv=None, dt=None,
+    def plot_river(self, vrot=None, vrad=0.0, residual=False,
                    plot_kwargs=None, profile_kwargs=None, return_fig=False):
         """
         Make a river plot, showing how the spectra change around the azimuth.
@@ -960,56 +1079,57 @@ class annulus(object):
         """
 
         # Imports.
-        from scipy.interpolate import griddata
+
         from matplotlib.ticker import MultipleLocator
         from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
-        # Deproject the spectra.
+        # Deproject and grid the spectra.
+
         if vrot is None:
             spectra = self.spectra
         else:
             spectra = self._deprojected_spectra(vrot=vrot, vrad=vrad)
-
-        # Grid the spectra.
-        dv = self.channel if dv is None else dv
-        dt = 360.0 / (self.spectra.shape[0] + 1) if dt is None else dt
-        vaxis = np.arange(self.velax[0], self.velax[-1]+dv, dv)
-        taxis = np.arange(-180-dt, 180+dt, dt)
-        vpnts, tpnts = np.meshgrid(self.theta_deg, self.velax)
-        spectra = griddata((tpnts.flatten(), vpnts.flatten()),
-                           spectra.T.flatten(),
-                           (vaxis[:, None], taxis[None, :]),
-                           method='nearest').T
+        spectra = self._interpolate_river(spectra)
 
         # Get the residual if necessary.
+
         mean_spectrum = np.nanmean(spectra, axis=0)
         if residual:
             spectra -= mean_spectrum
+            spectra *= 1e3
 
         # Estimate the RMS.
+
         rms = np.nanmax(spectra)
         for _ in range(5):
             rms = np.nanstd(spectra[abs(spectra) <= 3.0 * rms])
 
         # Define the min and max for plotting.
+
         vmax = np.nanmax(abs(spectra))
         vmin = -vmax if residual else -rms
 
         # Plot the data.
-        fig, ax = plt.subplots(figsize=(6.0, 2.0))
+
+        fig, ax = plt.subplots(figsize=(6.0, 2.25), constrained_layout=True)
         ax_divider = make_axes_locatable(ax)
-        im = ax.pcolormesh(vaxis, taxis, spectra, vmin=vmin, vmax=vmax,
-                           cmap='RdBu_r' if residual else 'bone_r')
+        im = ax.pcolormesh(self.velax_grid, np.degrees(self.theta_grid),
+                           spectra, vmin=vmin, vmax=vmax,
+                           cmap='RdBu_r' if residual else 'turbo')
+        ax.set_ylim(-180, 180)
         ax.yaxis.set_major_locator(MultipleLocator(60.0))
         ax.set_xlabel('Velocity (m/s)')
-        ax.set_ylabel('Polar Angle (deg)')
+        ax.set_ylabel(r'$\phi$' + ' (deg)')
 
         # Add the mean spectrum panel.
+
         if not residual:
             fig.set_size_inches(6.0, 2.5, forward=True)
             ax1 = ax_divider.append_axes('top', size='25%', pad='2%')
-            ax1.step(vaxis, mean_spectrum, where='mid', lw=1., c='k')
-            ax1.fill_between(vaxis, mean_spectrum, step='mid', color='.7')
+            ax1.step(self.velax_grid, mean_spectrum,
+                     where='mid', lw=1., c='k')
+            ax1.fill_between(self.velax_grid, mean_spectrum,
+                             step='mid', color='.7')
             ax1.set_ylim(3*vmin, vmax)
             ax1.set_xlim(ax.get_xlim()[0], ax.get_xlim()[1])
             ax1.set_xticklabels([])
@@ -1019,9 +1139,13 @@ class annulus(object):
                 ax1.spines[side].set_visible(False)
 
         # Add the colorbar.
+
         cb_ax = ax_divider.append_axes('right', size='2%', pad='1%')
         cb = plt.colorbar(im, cax=cb_ax)
-        cb.set_label('Flux Density (Jy/beam)', rotation=270, labelpad=13)
+        if residual:
+            cb.set_label('Residual (mJy/beam)', rotation=270, labelpad=13)
+        else:
+            cb.set_label('Intensity (Jy/beam)', rotation=270, labelpad=13)
         plt.tight_layout()
 
         if return_fig:
@@ -1029,58 +1153,103 @@ class annulus(object):
 
     # -- Plotting Functions -- #
 
-    def plot_spectra(self, ax=None, return_fig=False):
+    def plot_spectra(self, ax=None, return_fig=False, step_kwargs=None):
         """
         Plot the attached spectra on the same velocity axis.
 
         Args:
-            ax (optional): Matplotlib axis onto which the data will be plotted.
-            return_fig (optional[bool]): Return the figure.
+            ax (Optional): Matplotlib axis onto which the data will be plotted.
+            return_fig (Optional[bool]): Return the figure.
+            step_kwargs (Optional[dict])
 
         Returns
             Figure with the attached spectra plotted.
         """
         if ax is None:
-            fig, ax = plt.subplots()
+            fig, ax = plt.subplots(figsize=(5.0, 3.1), constrained_layout=True)
+        else:
+            return_fig = False
+        step_kwargs = {} if step_kwargs is None else step_kwargs
+        step_kwargs['where'] = step_kwargs.pop('where', 'mid')
+        step_kwargs['lw'] = step_kwargs.pop('lw', 1.0)
+        step_kwargs['c'] = step_kwargs.pop('c', 'k')
         for spectrum in self.spectra:
-            ax.step(self.velax, spectrum, where='mid', color='k')
-        ax.set_xlabel('Velocity')
-        ax.set_ylabel('Intensity')
+            ax.step(self.velax, spectrum, **step_kwargs)
+        ax.set_xlabel('Velocity (m/s)')
+        ax.set_ylabel('Intensity (Jy/beam)')
         ax.set_xlim(self.velax[0], self.velax[-1])
         if return_fig:
             return fig
 
-    @staticmethod
-    def _make_axes(ax=None):
-        """Make an axis to plot on."""
+    def plot_centroids(self, centroid_method='quadratic', plot_fit=None,
+                       fit_vrad=False, ax=None, return_fig=False,
+                       plot_kwargs=None):
+        """
+        Plot the measured line centroids as a function of polar angle.
+        """
         if ax is None:
-            _, ax = plt.subplots()
-        return ax
+            fig, ax = plt.subplots()
+        else:
+            return_fig = False
+
+        v0, dv0 = self.line_centroids(method=centroid_method)
+
+        plot_kwargs = {} if plot_kwargs is None else plot_kwargs
+        plot_kwargs['fmt'] = plot_kwargs.pop('fmt', 'o')
+        plot_kwargs['c'] = plot_kwargs.pop('c', 'k')
+        plot_kwargs['ms'] = plot_kwargs.pop('ms', 4)
+        plot_kwargs['lw'] = plot_kwargs.pop('lw', 1.25)
+        plot_kwargs['capsize'] = plot_kwargs.pop('capsize', 2.5)
+
+        L = ax.errorbar(self.theta_deg, v0, dv0, **plot_kwargs)
+        ax.set_xlim(-180, 180)
+        ax.xaxis.set_major_locator(MultipleLocator(60.0))
+        ax.xaxis.set_minor_locator(MultipleLocator(10.0))
+        ax.tick_params(which='minor', left=1)
+        ax.set_xlabel(r'$\phi$' + ' (deg)')
+        ax.set_ylabel(r'$v_0$' + ' (m/s)')
+
+        if plot_fit:
+
+            # Fit the data.
+
+            if fit_vrad:
+                popt, cvar = self.fit_SHO(fit_vrad=True,
+                                          centroid_method=centroid_method)
+                v_p, v_r, vlsr = popt
+                dv_p, dv_r, dvlsr = cvar
+            else:
+                popt, cvar = self.fit_SHO(fit_vrad=False,
+                                          centroid_method=centroid_method)
+                v_p, vlsr = popt
+                dv_p, dvlar = cvar
+                v_r = 0.0
+
+            v0mod = annulus._dSHO(self.theta_grid, v_p, v_r, vlsr)
+            ax.plot(np.degrees(self.theta_grid), v0mod, lw=1.0, ls='--',
+                    color='r', zorder=L[0].get_zorder()-10)
+
+            label = r'$v_{\phi,\, proj}$' + ' = {:.0f} '.format(v_p)
+            label += r'$\pm$' + ' {:.0f} (m/s)'.format(dv_p)
+            ax.text(0.975, 0.975, label, va='top', ha='right', color='r',
+                    transform=ax.transAxes)
+
+            if fit_vrad:
+                label = r'$v_{r,\, proj}$' + ' = {:.0f} '.format(v_r)
+                label += r'$\pm$' + ' {:.0f} (m/s)'.format(dv_r)
+                ax.text(0.975, 0.90, label, va='top', ha='right', color='r',
+                        transform=ax.transAxes)
+
+            ylim = max(ax.get_ylim()[1] - vlsr, vlsr - ax.get_ylim()[0])
+            ax.set_ylim(vlsr - ylim, vlsr + ylim)
+
+        if return_fig:
+            return fig
 
     @staticmethod
-    def _plot_corner(samples):
-        """Plot the corner plot for the MCMC."""
-        import corner
-        labels = [r'${\rm v_{rot}}$', r'${\rm v_{rad}}$',
-                  r'${\rm \sigma_{rms}}$', r'${\rm ln(\sigma)}$',
-                  r'${\rm ln(\rho)}$']
-        if samples.shape[1] == 4:
-            labels = labels[:1] + labels[-3:]
-        corner.corner(samples, labels=labels, quantiles=[0.16, 0.5, 0.84],
-                      show_titles=True)
-
-    @staticmethod
-    def _plot_walkers(sampler, nburnin):
-        """Plot the walkers from the MCMC."""
-        labels = [r'${\rm v_{rot}}$', r'${\rm v_{rad}}$',
-                  r'${\rm \sigma_{rms}}$', r'${\rm ln(\sigma)}$',
-                  r'${\rm ln(\rho)}$']
-        if sampler.chain.T.shape[0] == 4:
-            labels = labels[:1] + labels[-3:]
-        for s, sample in enumerate(sampler.chain.T):
-            _, ax = plt.subplots()
-            for walker in sample.T:
-                ax.plot(walker, alpha=0.1, color='k')
-            ax.set_xlabel('Steps')
-            ax.set_ylabel(labels[s])
-            ax.axvline(nburnin, ls=':', color='k')
+    def cmap_RdGy():
+        import matplotlib.colors as mcolors
+        c2 = plt.cm.Reds(np.linspace(0.0, 0.9, 16))
+        c1 = plt.cm.gray(np.linspace(0.2, 1.0, 16))
+        colors = np.vstack((c1, np.ones((2, 4)), c2))
+        return mcolors.LinearSegmentedColormap.from_list('eddymap', colors)

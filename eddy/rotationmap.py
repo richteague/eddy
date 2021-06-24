@@ -6,6 +6,7 @@ import emcee
 import numpy as np
 import scipy.constants as sc
 from .datacube import datacube
+from .helper_functions import plot_walkers, plot_corner, random_p0
 import matplotlib.pyplot as plt
 import warnings
 
@@ -39,10 +40,10 @@ class rotationmap(datacube):
 
     def __init__(self, path, FOV=None, uncertainty=None, downsample=None):
         datacube.__init__(self, path=path, FOV=FOV, fill=None)
+        self.mask = np.isfinite(self.data)
         self._readuncertainty(uncertainty=uncertainty, FOV=self.FOV)
         if downsample is not None:
-            self._downsample_cube(downsample)
-        self.mask = np.isfinite(self.data)
+            self.downsample_cube(downsample)
         self.vlsr = np.nanmedian(self.data)
         self.vlsr_kms = self.vlsr / 1e3
         self._set_default_priors()
@@ -217,9 +218,9 @@ class rotationmap(datacube):
                 walkers = sampler.chain.T
             else:
                 walkers = np.rollaxis(sampler.chain.copy(), 2)
-            rotationmap._plot_walkers(walkers, nburnin[-1], labels)
+            plot_walkers(walkers, nburnin[-1], labels)
         if 'corner' in plots:
-            rotationmap._plot_corner(samples, labels)
+            plot_corner(samples, labels)
         if 'bestfit' in plots:
             self.plot_model(samples=samples,
                             params=params,
@@ -359,7 +360,7 @@ class rotationmap(datacube):
         else:
             EnsembleSampler = emcee.EnsembleSampler
 
-        p0 = self._random_p0(p0, kwargs.pop('scatter', 1e-3), nwalkers)
+        p0 = random_p0(p0, kwargs.pop('scatter', 1e-3), nwalkers)
         moves = kwargs.pop('moves', None)
         pool = kwargs.pop('pool', None)
 
@@ -375,14 +376,6 @@ class rotationmap(datacube):
         sampler.run_mcmc(p0, nburnin + nsteps, progress=progress, **kwargs)
 
         return sampler
-
-    @staticmethod
-    def _random_p0(p0, scatter, nwalkers):
-        """Get the starting positions."""
-        p0 = np.squeeze(p0)
-        dp0 = np.random.randn(nwalkers * len(p0)).reshape(nwalkers, len(p0))
-        dp0 = np.where(p0 == 0.0, 1.0, p0)[None, :] * (1.0 + scatter * dp0)
-        return np.where(p0[None, :] == 0.0, dp0 - 1.0, dp0)
 
     def _ln_likelihood(self, params):
         """Log-likelihood function. Simple chi-squared likelihood."""
@@ -634,7 +627,7 @@ class rotationmap(datacube):
             else:
                 return self._make_model(params.copy())
 
-        nparam = np.sum([isinstance(params[k], int) for k in params.keys()])
+        nparam = np.sum([type(params[k]) is int for k in params.keys()])
         if samples.shape[1] != nparam:
             warning = "Invalid number of free parameters in 'samples': {:d}."
             raise ValueError(warning.format(nparam))
@@ -1008,7 +1001,7 @@ class rotationmap(datacube):
 
     # -- Axes Functions -- #
 
-    def _downsample_cube(self, N, randomize=False):
+    def downsample_cube(self, N, randomize=False):
         """Downsample the cube to make faster calculations."""
         N = int(np.ceil(self.bmaj / self.dpix)) if N == 'beam' else N
         if randomize:
@@ -1020,6 +1013,7 @@ class rotationmap(datacube):
             self.yaxis = self.yaxis[N0y::N]
             self.data = self.data[N0y::N, N0x::N]
             self.error = self.error[N0y::N, N0x::N]
+            self.mask = self.mask[N0y::N, N0x::N]
 
     def _shift_center(self, dx=0.0, dy=0.0, data=None, save=True):
         """
@@ -1241,7 +1235,7 @@ class rotationmap(datacube):
 
         # Check the input.
 
-        nparam = np.sum([isinstance(params[k], int) for k in params.keys()])
+        nparam = np.sum([type(params[k]) is int for k in params.keys()])
         if samples.shape[1] != nparam:
             warning = "Invalid number of free parameters in 'samples': {:d}."
             raise ValueError(warning.format(nparam))
@@ -1370,56 +1364,3 @@ class rotationmap(datacube):
 
         if return_fig:
             return fig
-
-    @staticmethod
-    def _plot_walkers(samples, nburnin=None, labels=None, histogram=True):
-        """Plot the walkers to check if they are burning in."""
-
-        # Import matplotlib.
-        import matplotlib.pyplot as plt
-        from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
-
-        # Check the length of the label list.
-        if labels is None:
-            if samples.shape[0] != len(labels):
-                raise ValueError("Not correct number of labels.")
-
-        # Cycle through the plots.
-        for s, sample in enumerate(samples):
-            fig, ax = plt.subplots()
-            for walker in sample.T:
-                ax.plot(walker, alpha=0.1, color='k')
-            ax.set_xlabel('Steps')
-            if labels is not None:
-                ax.set_ylabel(labels[s])
-            if nburnin is not None:
-                ax.axvline(nburnin, ls=':', color='r')
-
-            # Include the histogram.
-            if histogram:
-                fig.set_size_inches(1.37 * fig.get_figwidth(),
-                                    fig.get_figheight(), forward=True)
-                ax_divider = make_axes_locatable(ax)
-                bins = np.linspace(ax.get_ylim()[0], ax.get_ylim()[1], 50)
-                hist, _ = np.histogram(sample[nburnin:].flatten(), bins=bins,
-                                       density=True)
-                bins = np.average([bins[1:], bins[:-1]], axis=0)
-                ax1 = ax_divider.append_axes("right", size="35%", pad="2%")
-                ax1.fill_betweenx(bins, hist, np.zeros(bins.size), step='mid',
-                                  color='darkgray', lw=0.0)
-                ax1.set_ylim(ax.get_ylim()[0], ax.get_ylim()[1])
-                ax1.set_xlim(0, ax1.get_xlim()[1])
-                ax1.set_yticklabels([])
-                ax1.set_xticklabels([])
-                ax1.tick_params(which='both', left=0, bottom=0, top=0, right=0)
-                ax1.spines['right'].set_visible(False)
-                ax1.spines['bottom'].set_visible(False)
-                ax1.spines['top'].set_visible(False)
-
-    @staticmethod
-    def _plot_corner(samples, labels=None, quantiles=None):
-        """Plot the corner plot to check for covariances."""
-        import corner
-        quantiles = [0.16, 0.5, 0.84] if quantiles is None else quantiles
-        corner.corner(samples, labels=labels, title_fmt='.4f', bins=30,
-                      quantiles=quantiles, show_titles=True)

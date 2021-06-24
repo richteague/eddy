@@ -5,6 +5,7 @@ import numpy as np
 from astropy.io import fits
 import scipy.constants as sc
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator, MultipleLocator
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -41,7 +42,7 @@ class datacube(object):
         # Clip down the cube.
 
         if FOV is not None:
-            self._clip_cube_spatial(FOV / 2.0)
+            self._clip_cube_spatial(FOV / 2.0, initial_load=True)
         if velocity_range is not None:
             self._clip_cube_velocity(*velocity_range)
 
@@ -423,31 +424,46 @@ class datacube(object):
         self.velax = self.velax[i:j+1]
         self.data = self.data[i:j+1]
 
-    def _clip_cube_spatial(self, radius):
+    def clip_cube_spatial(self, FOV):
+        """Applies the new FOV."""
+        if FOV > (self.xaxis.max() - self.xaxis.min()):
+            raise ValueError("Cannot apply a larger FOV.")
+        xa, xb, ya, yb = self._clip_cube_spatial(FOV / 2.0, False, True)
+        self.data = self.data[ya:yb, xa:xb]
+        self.error = self.error[ya:yb, xa:xb]
+        self.mask = self.mask[ya:yb, xa:xb]
+        self.xaxis = self.xaxis[xa:xb]
+        self.yaxis = self.yaxis[ya:yb]
+
+    def _clip_cube_spatial(self, radius, initial_load=True, indices=False):
         """Clip the cube plus or minus clip arcseconds from the origin."""
         if radius > min(self.xaxis.max(), self.yaxis.max()):
             print('WARNING: FOV = {:.1f}" larger than '.format(radius * 2)
                   + 'FOV of cube: {:.1f}".'.format(self.xaxis.max() * 2))
         else:
-            self._original_shape = self.data.shape
+            if initial_load:
+                self._original_shape = self.data.shape
             xa = abs(self.xaxis - radius).argmin()
             if self.xaxis[xa] < radius:
                 xa -= 1
-            self._xa = xa
             xb = abs(self.xaxis + radius).argmin()
             if -self.xaxis[xb] < radius:
                 xb += 1
             xb += 1
-            self._xb = xb
             ya = abs(self.yaxis + radius).argmin()
             if -self.yaxis[ya] < radius:
                 ya -= 1
-            self._ya = ya
             yb = abs(self.yaxis - radius).argmin()
             if self.yaxis[yb] < radius:
                 yb += 1
             yb += 1
-            self._yb = yb
+            if initial_load:
+                self._xa = xa
+                self._xb = xb
+                self._ya = ya
+                self._yb = yb
+            if indices:
+                return xa, xb, ya, yb
             if self.data.ndim == 3:
                 self.data = self.data[:, ya:yb, xa:xb]
             else:
@@ -602,16 +618,61 @@ class datacube(object):
         from astropy.convolution import convolve
         return convolve(image, kernel, preserve_nan=True)
 
+    # -- DIAGNOSTIC FUNCTIONS -- #
+
+    def estimate_cube_RMS(self, N=10, r_in=0.0, r_out=1e10):
+        """
+        Estimate RMS of the cube based on first and last `N` channels and a
+        circular area described by an inner and outer radius.
+
+        Args:
+            N (int): Number of edge channels to include.
+            r_in (float): Inner edge of pixels to consider in [arcsec].
+            r_out (float): Outer edge of pixels to consider in [arcsec].
+
+        Returns:
+            RMS (float): The RMS based on the requested pixel range.
+        """
+        r_dep = np.hypot(self.xaxis[None, :], self.yaxis[:, None])
+        rmask = np.logical_and(r_dep >= r_in, r_dep <= r_out)
+        rms = np.concatenate([self.data[:int(N)], self.data[-int(N):]])
+        rms = np.where(rmask[None, :, :], rms, np.nan)
+        return np.sqrt(np.nansum(rms**2) / np.sum(np.isfinite(rms)))
+
+    def integrated_spectrum(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, r_min=None,
+                            r_max=None):
+        """
+        Returns the integrated spectrum over a specified region.
+
+        Args:
+            x0 (Optional[float]): Right Ascension offset in [arcsec].
+            y0 (Optional[float]): Declination offset in [arcsec].
+            inc (Optional[float]): Disk inclination in [deg].
+            PA (Optional[float]): Disk position angle in [deg].
+            r_min (Optional[float]): Radius to integrate out from in [arcsec].
+            r_max (Optional[float]): Radius to integrate out to in [arcsec].
+
+        Returns:
+            spectrum, uncertainty (array, array): Something about these.
+        """
+        rr = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA)[0]
+        r_max = rr.max() if r_max is None else r_max
+        r_min = 0.0 if r_min is None else r_min
+        mask = np.logical_and(rr <= r_max, rr >= r_min)
+        nbeams = np.where(mask, 1, 0).sum() / self.pix_per_beam
+        spectrum = np.array([np.nansum(c[mask]) for c in self.data])
+        spectrum *= self.beams_per_pix
+        uncertainty = np.sqrt(nbeams) * self.estimate_cube_RMS()
+        return spectrum, uncertainty
+
     # -- PLOTTING FUNCTIONS -- #
 
     @staticmethod
     def cmap():
-        import matplotlib.pyplot as plt
         import matplotlib.colors as mcolors
-        c2 = plt.cm.Reds(np.linspace(0, 1, 32))
-        c1 = plt.cm.Blues_r(np.linspace(0, 1, 32))
-        c1 = np.vstack([c1, [1, 1, 1, 1]])
-        colors = np.vstack((c1, c2))
+        c2 = plt.cm.Reds(np.linspace(0, 1, 16))
+        c1 = plt.cm.Blues_r(np.linspace(0, 1, 16))
+        colors = np.vstack((c1, np.ones((2, 4)), c2))
         return mcolors.LinearSegmentedColormap.from_list('eddymap', colors)
 
     @property
@@ -645,7 +706,6 @@ class datacube(object):
 
     def _gentrify_plot(self, ax):
         """Gentrify the plot with a grid, label axes and a beam."""
-        from matplotlib.ticker import MaxNLocator
         ax.set_aspect(1)
         ax.grid(ls='--', color='k', alpha=0.2, lw=0.5)
         ax.tick_params(which='both', right=True, top=True)
@@ -653,10 +713,57 @@ class datacube(object):
         ax.set_ylim(self.yaxis.min(), self.yaxis.max())
         ax.xaxis.set_major_locator(MaxNLocator(5, min_n_ticks=3))
         ax.yaxis.set_major_locator(MaxNLocator(5, min_n_ticks=3))
+        ticks = np.diff(ax.xaxis.get_majorticklocs()).mean() / 5.0
+        ax.xaxis.set_minor_locator(MultipleLocator(ticks))
+        ax.yaxis.set_minor_locator(MultipleLocator(ticks))
         ax.set_xlabel('Offset (arcsec)')
         ax.set_ylabel('Offset (arcsec)')
         if self.bmaj is not None:
             self.plot_beam(ax=ax)
+
+    def plot_maximum(self, ax=None, imshow_kwargs=None, return_fig=False):
+        """
+        Plot the maximum value along each spcetrum.
+
+        Args:
+            TBD
+
+        Returns:
+            TBD
+        """
+
+        # Dummy axis to overplot.
+
+        if ax is None:
+            fig, ax = plt.subplots()
+        else:
+            return_fig = False
+
+        # Collapse the data.
+
+        dmax = np.nanmax(self.data, axis=0)
+        vmax = np.percentile(dmax, [98])
+
+        # Imshow defaults and plot the figure.
+
+        imshow_kwargs = {} if imshow_kwargs is None else imshow_kwargs
+        imshow_kwargs['interpolation'] = 'nearest'
+        imshow_kwargs['extent'] = self.extent
+        imshow_kwargs['origin'] = 'lower'
+        imshow_kwargs['cmap'] = imshow_kwargs.pop('cmap', 'turbo')
+        imshow_kwargs['vmin'] = imshow_kwargs.pop('vmin', 0.0)
+        imshow_kwargs['vmax'] = imshow_kwargs.pop('vmax', vmax)
+
+        im = ax.imshow(dmax, **imshow_kwargs)
+        cb = plt.colorbar(im, ax=ax, pad=0.03, extend='both')
+        cb.set_label('Peak Intensity (Jy/beam)', rotation=270, labelpad=13)
+        cb.minorticks_on()
+        self._gentrify_plot(ax=ax)
+
+        # Returns
+
+        if return_fig:
+            return fig
 
     def plot_surface(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=None, psi=None,
                      r_cavity=None, r_taper=None, q_taper=None, w_i=None,
@@ -704,6 +811,8 @@ class datacube(object):
 
         if ax is None:
             fig, ax = plt.subplots()
+        else:
+            return_fig = False
 
         rvals, tvals, zvals = self.disk_coords(x0=x0, y0=y0,
                                                inc=inc, PA=PA,
@@ -777,6 +886,38 @@ class datacube(object):
             ax.contour(self.xaxis, self.yaxis, ttmp, **kw)
         ax.set_xlim(max(ax.get_xlim()), min(ax.get_xlim()))
         ax.set_aspect(1)
+
+        if return_fig:
+            return fig
+
+    def plot_spectrum(self, ax=None, x0=0.0, y0=0.0, inc=0.0, PA=0.0,
+                      r_min=None, r_max=None, return_fig=False):
+        """
+        Plot the integrated spectrum.
+
+        Args:
+            x0 (Optional[float]): Right Ascension offset in [arcsec].
+            y0 (Optional[float]): Declination offset in [arcsec].
+            inc (Optional[float]): Disk inclination in [deg].
+            PA (Optional[float]): Disk position angle in [deg].
+            r_max (Optional[float]): Radius to integrate out to in [arcsec].
+        """
+        if ax is None:
+            fig, ax = plt.subplots()
+        else:
+            return_fig = False
+        x = self.velax.copy() / 1e3
+        y, dy = self.integrated_spectrum(x0, y0, inc, PA, r_min, r_max)
+        ax.axhline(0.0, ls='--', lw=1.0, color='0.9', zorder=-9)
+        ax.step(x, y, where='mid', lw=1.0, color='k')
+        ax.errorbar(x, y, dy, fmt=' ', lw=1.0, color='k', zorder=-8)
+        ax.set_xlabel("Velocity (km/s)")
+        ax.set_ylabel("Integrated Flux (Jy)")
+        ax.set_xlim(x[0], x[-1])
+        ticks = np.diff(ax.xaxis.get_majorticklocs()).mean() / 5.0
+        ax.xaxis.set_minor_locator(MultipleLocator(ticks))
+        ticks = np.diff(ax.yaxis.get_majorticklocs()).mean() / 5.0
+        ax.yaxis.set_minor_locator(MultipleLocator(ticks))
 
         if return_fig:
             return fig

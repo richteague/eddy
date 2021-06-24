@@ -1,4 +1,4 @@
 from .rotationmap import rotationmap
-from .datacube import datacube
+from .linecube import linecube
 
-__all__ = ["datacube", "rotationmap"]
+__all__ = ["rotationmap", "linecube"]
