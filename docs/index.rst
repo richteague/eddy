@@ -34,12 +34,6 @@ Contents
 
 .. toctree::
    :maxdepth: 2
-   :caption: API
-
-   user/rotationmap
-
-.. toctree::
-   :maxdepth: 2
    :caption: Tutorials
 
    tutorials/tutorial_1
