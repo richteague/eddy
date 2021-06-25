@@ -29,7 +29,7 @@ class annulus(object):
         spectra (ndarray): Array of shape ``[N, M]`` of spectra to shift and
             fit, where ``N`` is the number of spectra and ``M`` is the length
             of the velocity axis.
-        theta (ndarray): Polar angles in [rad] of each of the spectra.
+        pvals (ndarray): Polar angles in [rad] of each of the spectra.
         velax (ndarray): Velocity axis in [m/s] of the spectra.
         remove_empty (optional[bool]): Remove empty spectra.
         sort_spectra (optional[bool]): Sorted the spectra into increasing
@@ -37,14 +37,17 @@ class annulus(object):
         suppress_warnings (optional[bool]): If ``True``, suppress all warnings.
     """
 
-    def __init__(self, spectra, pvals, rvals, velax,
+    def __init__(self, spectra, pvals, velax, rotation='clockwise',
                  remove_empty=True, sort_spectra=True):
 
         # Read in the spectra and remove bad values.
 
         self.theta = pvals
-        self.rvals = rvals
         self.spectra = spectra
+        self.rotation = rotation
+        if self.rotation not in ['clockwise', 'anticlockwise']:
+            msg = "Unknokwn rotation, {}.".format(self.rotation)
+            raise ValueError(msg + " Must br 'clockwise' or 'anticlockwise'.")
         self.rms = self._estimate_RMS()
 
         # Sort the spectra.
@@ -94,7 +97,7 @@ class annulus(object):
 
     # -- Measure the Velocity -- #
 
-    def get_vlos(self, p0=None, fit_method='GP', fit_vrad=False,
+    def get_vlos(self, p0=None, fit_method='SHO', fit_vrad=False,
                  resample=False, optimize=True, nwalkers=32, nburnin=500,
                  nsteps=500, scatter=1e-3, signal='int', optimize_kwargs=None,
                  plots=None, returns=None, mcmc='emcee', mcmc_kwargs=None,
@@ -102,14 +105,16 @@ class annulus(object):
         """
         Infer the requested velocities by shifting lines back to a common
         center and stacking. The quality of fit is given by the selected
-        method which must be ``'dv'``, ``'GP'`` or ``'SNR'``. The former,
-        described in `Teague et al. (2018a)`_, minimizes the line width of the
-        resulting spectrum via :func:`deprojected_width`. Similarly,
+        method which must be ``'dv'``, ``'GP'``, ``'SNR'`` or ``'SHO'``. The
+        former, described in `Teague et al. (2018a)`_, minimizes the line width
+        of the resulting spectrum via :func:`deprojected_width`. Similarly,
         ``fit_method='SNR'`` aims to maximize the signal to noise of the
         spectrum, as used in `Yen et al. (2016)`_, with specifics of the method
         described in :func:`deprojected_nSNR`. Finally, ``fit_method='GP'``
         uses a Gaussian Process model which relaxes the assumption of an
-        analytical line profile, as used in `Teague et al. (2018b)`_.
+        analytical line profile, as used in `Teague et al. (2018b)`_. Finally,
+        ``fit_method='SHO'`` fits the line centroids with a simple harmonic
+        oscillator, as in `Casassus & Perez (2019)`_.
 
         Different types of resampling can be applied to the spectrum. In
         general it is recommended that ``resample=False`` for the Gaussian
@@ -143,7 +148,7 @@ class annulus(object):
         .. _Teague et al. (2018a): https://ui.adsabs.harvard.edu/abs/2018ApJ...860L..12T/abstract
         .. _Teague et al. (2018b): https://ui.adsabs.harvard.edu/abs/2018ApJ...868..113T/abstract
         .. _Yen et al. (2016): https://ui.adsabs.harvard.edu/abs/2016ApJ...832..204Y/abstract
-
+        .. _Casassus & Perez (2019): https://ui.adsabs.harvard.edu/abs/2019ApJ...883L..41C/abstract
         """
 
         # Check the input variables.
@@ -609,8 +614,15 @@ class annulus(object):
         optimize_kwargs = {} if optimize_kwargs is None else optimize_kwargs
         optimize_kwargs['absolute_sigma'] = True
         optimize_kwargs['maxfev'] = optimize_kwargs.pop('maxfev', 10000)
-        popt, cvar = curve_fit(annulus._dSHO if fit_vrad else annulus._SHO,
-                               self.theta, v0, sigma=dv0, **optimize_kwargs)
+        try:
+            popt, cvar = curve_fit(annulus._dSHO if fit_vrad else annulus._SHO,
+                                   self.theta, v0, sigma=dv0,
+                                   **optimize_kwargs)
+        except TypeError:
+            popt = np.empty(2 if fit_vrad else 1)
+            cvar = popt[:, None] * popt[None, :]
+        if fit_vrad:
+            popt[1] *= -1.0 if self.rotation == 'clockwise' else 1.0
         return popt, np.diag(cvar)**0.5
 
     # -- Rotation Velocity by Maximizing SNR -- #
@@ -706,10 +718,7 @@ class annulus(object):
         Returns:
             Negative of the signal-to-noise ratio.
         """
-        if fit_vrad:
-            vrot, vrad = theta
-        else:
-            vrot, vrad = theta, 0.0
+        vrot, vrad = theta if fit_vrad else (theta, 0.0)
         x, y = self.deprojected_spectrum(vrot, vrad, resample, scatter=False)
         x0, dx, A = annulus._fit_gaussian(x, y)
         noise = np.std(x[(x - x0) / dx > 3.0])  # Check: noise will vary.
@@ -849,6 +858,7 @@ class annulus(object):
         """
         _vrot = vrot * np.cos(self.theta)
         _vrad = vrad * np.sin(self.theta)
+        _vrad *= -1.0 if self.rotation == 'clockwise' else 1.0
         return _vrot + _vrad
 
     def _deprojected_spectra(self, vrot, vrad=0.0):
@@ -1106,18 +1116,21 @@ class annulus(object):
 
         # Define the min and max for plotting.
 
-        vmax = np.nanmax(abs(spectra))
-        vmin = -vmax if residual else -rms
+        kw = {} if plot_kwargs is None else plot_kwargs
+        xlim = kw.pop('xlim', None)
+        kw['vmax'] = kw.pop('vmax', np.nanmax(abs(spectra)))
+        kw['vmin'] = kw.pop('vmin', -kw['vmax'] if residual else -rms)
+        kw['cmap'] = kw.pop('cmap', 'RdBu_r' if residual else 'turbo')
 
         # Plot the data.
 
         fig, ax = plt.subplots(figsize=(6.0, 2.25), constrained_layout=True)
         ax_divider = make_axes_locatable(ax)
         im = ax.pcolormesh(self.velax_grid, np.degrees(self.theta_grid),
-                           spectra, vmin=vmin, vmax=vmax,
-                           cmap='RdBu_r' if residual else 'turbo')
+                           spectra, **kw)
         ax.set_ylim(-180, 180)
         ax.yaxis.set_major_locator(MultipleLocator(60.0))
+        ax.set_xlim(xlim)
         ax.set_xlabel('Velocity (m/s)')
         ax.set_ylabel(r'$\phi$' + ' (deg)')
 
@@ -1130,7 +1143,7 @@ class annulus(object):
                      where='mid', lw=1., c='k')
             ax1.fill_between(self.velax_grid, mean_spectrum,
                              step='mid', color='.7')
-            ax1.set_ylim(3*vmin, vmax)
+            ax1.set_ylim(3*kw['vmin'], kw['vmax'])
             ax1.set_xlim(ax.get_xlim()[0], ax.get_xlim()[1])
             ax1.set_xticklabels([])
             ax1.set_yticklabels([])

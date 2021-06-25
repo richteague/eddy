@@ -22,6 +22,201 @@ class linecube(datacube):
     def __init__(self, path, FOV=None, fill=0.0):
         datacube.__init__(self, path=path, FOV=FOV, fill=fill)
 
+    # -- ROTATION PROFILE FUNCTIONS -- #
+
+    def get_velocity_profile(self, rbins=None, fit_method='GP', fit_vrad=False,
+                             x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=None,
+                             psi=None, r_cavity=None, r_taper=None,
+                             q_taper=None, w_i=None, w_r=None, w_t=None,
+                             z_func=None, shadowed=False, phi_min=None,
+                             phi_max=None, exclude_phi=False, abs_phi=False,
+                             mask_frame='disk', user_mask=None,
+                             beam_spacing=True, deproject=False, niter=1,
+                             get_vlos_kwargs=None, weighted_average=True,
+                             return_samples=False):
+        """
+        Returns the rotational and, optionally, radial velocity profiles under
+        the assumption that the disk is azimuthally symmetric (at least across
+        the regions extracted).
+
+        Args:
+            TBD
+
+        Returns:
+            TBD
+        """
+
+        if niter == 0:
+            raise ValueError("`niter` must be >= 1.")
+
+        # Single iteration.
+
+        if niter == 1:
+            return self._velocity_profile(rbins=rbins,
+                                          fit_method=fit_method,
+                                          fit_vrad=fit_vrad,
+                                          x0=x0,
+                                          y0=y0,
+                                          inc=inc,
+                                          PA=PA,
+                                          z0=z0,
+                                          psi=psi,
+                                          r_cavity=r_cavity,
+                                          r_taper=r_taper,
+                                          q_taper=q_taper,
+                                          w_i=w_i,
+                                          w_r=w_r,
+                                          w_t=w_t,
+                                          z_func=z_func,
+                                          shadowed=shadowed,
+                                          phi_min=phi_min,
+                                          phi_max=phi_max,
+                                          exclude_phi=exclude_phi,
+                                          abs_phi=abs_phi,
+                                          mask_frame=mask_frame,
+                                          user_mask=user_mask,
+                                          beam_spacing=beam_spacing,
+                                          get_vlos_kwargs=get_vlos_kwargs)
+
+        # Multiple iterations.
+
+        samples = [self._velocity_profile(rbins=rbins,
+                                          fit_method=fit_method,
+                                          fit_vrad=fit_vrad,
+                                          x0=x0,
+                                          y0=y0,
+                                          inc=inc,
+                                          PA=PA,
+                                          z0=z0,
+                                          psi=psi,
+                                          r_cavity=r_cavity,
+                                          r_taper=r_taper,
+                                          q_taper=q_taper,
+                                          w_i=w_i,
+                                          w_r=w_r,
+                                          w_t=w_t,
+                                          z_func=z_func,
+                                          shadowed=shadowed,
+                                          phi_min=phi_min,
+                                          phi_max=phi_max,
+                                          exclude_phi=exclude_phi,
+                                          abs_phi=abs_phi,
+                                          mask_frame=mask_frame,
+                                          user_mask=user_mask,
+                                          beam_spacing=beam_spacing,
+                                          get_vlos_kwargs=get_vlos_kwargs)
+                   for _ in range(niter)]
+
+        # Just return the samples.
+
+        if return_samples:
+            return samples
+        rpnts = samples[0][0]
+        profiles = np.array([s[1] for s in samples])
+
+        # Calculate weights.
+
+        if weighted_average:
+            weights = [1.0 / s[2] for s in samples]
+            weights = np.where(np.isfinite(weights), weights, 0.0)
+        else:
+            weights = np.ones(profiles.shape)
+        if np.all(np.sum(weights, axis=0) == 0.0):
+            weights = np.ones(profiles.shape)
+        M = np.sum(weights != 0.0, axis=0)
+
+        # Weighted average.
+
+        profile = np.average(profiles, weights=weights, axis=0)
+
+        # Weighted standard deviation.
+
+        uncertainty = weights * (profiles - profile[None, :, :])**2
+        uncertainty = np.sum(uncertainty, axis=0)
+        uncertainty /= (M - 1.0) / M * np.sum(weights, axis=0)
+        uncertainty = np.sqrt(uncertainty)
+        return rpnts, profile, uncertainty
+
+    def _velocity_profile(self, rbins=None, fit_method='GP', fit_vrad=False,
+                          x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=None,
+                          psi=None, r_cavity=None, r_taper=None, q_taper=None,
+                          w_i=None, w_r=None, w_t=None, z_func=None,
+                          shadowed=False, phi_min=None, phi_max=None,
+                          exclude_phi=False, abs_phi=False, mask_frame='disk',
+                          user_mask=None, beam_spacing=True, deproject=False,
+                          get_vlos_kwargs=None):
+        """Returns the velocity (rotational and radial) profiles."""
+
+        # Define the radial binning.
+
+        if rbins is None:
+            rbins = np.arange(0, self.xaxis.max(), 0.25 * self.bmaj)
+        rpnts = np.mean([rbins[1:], rbins[:-1]], axis=0)
+
+        # Set up the kwargs for the fitting.
+
+        kw = {} if get_vlos_kwargs is None else get_vlos_kwargs
+        kw['fit_vrad'] = kw.pop('fit_vrad', fit_vrad)
+        kw['fit_method'] = fit_method
+        if fit_method.lower() == 'gp':
+            kw['plots'] = 'none'
+            kw['returns'] = 'percentiles'
+
+        # Cycle through the annuli.
+
+        profiles = []
+        uncertainties = []
+        for r_min, r_max in zip(rbins[:-1], rbins[1:]):
+            annulus = self.get_annulus(r_min=r_min,
+                                       r_max=r_max,
+                                       phi_min=phi_min,
+                                       phi_max=phi_max,
+                                       exclude_phi=exclude_phi,
+                                       abs_phi=abs_phi,
+                                       x0=x0,
+                                       y0=y0,
+                                       inc=inc,
+                                       PA=PA,
+                                       z0=z0,
+                                       psi=psi,
+                                       r_cavity=r_cavity,
+                                       r_taper=r_taper,
+                                       q_taper=q_taper,
+                                       w_i=w_i,
+                                       w_r=w_r,
+                                       w_t=w_t,
+                                       z_func=z_func,
+                                       shadowed=shadowed,
+                                       mask_frame=mask_frame,
+                                       user_mask=user_mask,
+                                       beam_spacing=beam_spacing)
+            output = annulus.get_vlos(**kw)
+
+            # Parse the outputs.
+
+            par = 2 if fit_vrad else 1
+            output = np.empty(par) if np.all(np.isnan(output)) else output
+            if fit_method.lower() in ['dv', 'snr']:
+                profiles += [output]
+                uncertainties += [np.ones(par) * np.nan]
+            elif fit_method.lower() == 'sho':
+                profiles += [output[0]]
+                uncertainties += [output[1]]
+            elif fit_method.lower() == 'gp':
+                profiles += [output[:par, 1]]
+                uncertainties += [0.5 * (output[:par, 2] - output[:par, 0])]
+
+        profiles = np.atleast_2d(profiles).T
+        uncertainties = np.atleast_2d(uncertainties).T
+
+        # Deproject the velocity profiles.
+
+        if deproject:
+            profiles /= np.sin(np.radians(abs(inc)))
+            uncertainties /= np.sin(np.radians(abs(inc)))
+
+        return rpnts, profiles, uncertainties
+
     # -- ANNULUS FUNCTIONS -- #
 
     def get_annulus(self, r_min, r_max, phi_min=None, phi_max=None,
@@ -90,8 +285,9 @@ class linecube(datacube):
         # Return the annulus instance.
 
         annulus_kwargs = {} if annulus_kwargs is None else annulus_kwargs
-        return annulus(spectra=dvals, rvals=rvals, pvals=pvals,
-                       velax=self.velax, **annulus_kwargs)
+        return annulus(spectra=dvals, pvals=pvals, velax=self.velax,
+                       rotation='clockwise' if inc >= 0.0 else 'anticlockwise',
+                       **annulus_kwargs)
 
     def _independent_samples(self, beam_spacing, rvals, pvals, dvals):
         """Returns spatially independent samples."""
@@ -223,6 +419,8 @@ class linecube(datacube):
         if user_mask is not None:
             mask *= user_mask
         return mask
+
+    # -- PLOTTING FUNCTIONS -- #
 
     def plot_mask(self, ax, r_min=None, r_max=None, exclude_r=False,
                   phi_min=None, phi_max=None, exclude_phi=False, abs_phi=False,
