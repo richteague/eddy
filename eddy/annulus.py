@@ -11,6 +11,7 @@ from scipy.optimize import curve_fit
 from scipy.optimize import minimize
 
 # Check is 'celerite' is installed.
+
 try:
     import celerite
     celerite_installed = True
