@@ -28,7 +28,6 @@ If you want to live on the edge, you can clone the repository and install that,
 but I cannot promise everything will work as described here.
 
 
-
 Contents
 --------
 
