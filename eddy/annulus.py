@@ -580,9 +580,10 @@ class annulus(object):
             The Doppler width of the average stacked spectrum using the
             velocities to align the individual spectra.
         """
+        from .helper_functions import get_gaussian_width
         vrot, vrad = theta if fit_vrad else (theta, 0.0)
         x, y = self.deprojected_spectrum(vrot, vrad, resample, scatter=False)
-        return annulus._get_gaussian_width(*self._get_masked_spectrum(x, y))
+        return get_gaussian_width(*self._get_masked_spectrum(x, y))
 
     # -- Rotation Velocity by Fitting a SHO -- #
 
@@ -606,6 +607,7 @@ class annulus(object):
             pop, cvar (array, array): Arrays of the best-fit parameter values
             and their uncertainties returned from ``curve_fit``.
         """
+        from .helper_functions import SHO, SHO_double
         v0, dv0 = self.line_centroids(method=centroid_method)
         assert v0.size == self.theta.size
         if p0 is None:
@@ -616,7 +618,7 @@ class annulus(object):
         optimize_kwargs['absolute_sigma'] = True
         optimize_kwargs['maxfev'] = optimize_kwargs.pop('maxfev', 10000)
         try:
-            popt, cvar = curve_fit(annulus._dSHO if fit_vrad else annulus._SHO,
+            popt, cvar = curve_fit(SHO_double if fit_vrad else SHO,
                                    self.theta, v0, sigma=dv0,
                                    **optimize_kwargs)
         except TypeError:
@@ -719,15 +721,16 @@ class annulus(object):
         Returns:
             Negative of the signal-to-noise ratio.
         """
+        from .helper_functions import gaussian, fit_gaussian
         vrot, vrad = theta if fit_vrad else (theta, 0.0)
         x, y = self.deprojected_spectrum(vrot, vrad, resample, scatter=False)
-        x0, dx, A = annulus._fit_gaussian(x, y)
+        x0, dx, A = fit_gaussian(x, y)
         noise = np.std(x[(x - x0) / dx > 3.0])  # Check: noise will vary.
         if signal == 'max':
             SNR = A / noise
         else:
             if signal == 'weighted':
-                w = annulus._gaussian(x, x0, dx, (np.sqrt(np.pi) * dx)**-1)
+                w = gaussian(x, x0, dx, (np.sqrt(np.pi) * dx)**-1)
             else:
                 w = np.ones(x.size)
             mask = (x - x0) / dx <= 1.0
@@ -747,101 +750,6 @@ class annulus(object):
         else:
             std = np.nanstd([self.spectra[:, :N], self.spectra[:, -N:]])
         return std
-
-    @staticmethod
-    def _get_gaussian_width(x, y, fill_value=1e50):
-        """Return the absolute width of a Gaussian fit to the spectrum."""
-        dV = annulus._fit_gaussian(x, y)[1]
-        if np.isfinite(dV):
-            return abs(dV)
-        return fill_value
-
-    @staticmethod
-    def _get_p0_gaussian(x, y):
-        """Estimate (x0, dV, Tb) for the spectrum."""
-        if x.size != y.size:
-            raise ValueError("Mismatch in array shapes.")
-        Tb = np.max(y)
-        x0 = x[y.argmax()]
-        dV = np.trapz(y, x) / Tb / np.sqrt(2. * np.pi)
-        return x0, dV, Tb
-
-    @staticmethod
-    def _fit_gaussian(x, y, dy=None, return_uncertainty=None):
-        """Fit a gaussian to (x, y, [dy])."""
-        if return_uncertainty is None:
-            return_uncertainty = dy is not None
-        dy = dy * np.ones(x.size) if dy is not None else dy
-        try:
-            popt, cvar = curve_fit(annulus._gaussian, x, y, sigma=dy,
-                                   p0=annulus._get_p0_gaussian(x, y),
-                                   absolute_sigma=True, maxfev=100000)
-            cvar = np.diag(cvar)
-        except Exception:
-            popt = [np.nan, np.nan, np.nan]
-            cvar = popt.copy()
-        if return_uncertainty:
-            return popt, np.sqrt(cvar)
-        return popt
-
-    @staticmethod
-    def _fit_gaussian_thick(x, y, dy=None, return_uncertainty=None):
-        """Fit an optically thick Gaussian function to (x, y, [dy])."""
-        if return_uncertainty is None:
-            return_uncertainty = dy is not None
-        dy = dy * np.ones(x.size) if dy is not None else dy
-        p0 = annulus._fit_gaussian(x=x, y=y, dy=dy, return_uncertainty=False)
-        p0 = np.append(p0, 1.0)
-        try:
-            popt, cvar = curve_fit(annulus._gaussian_thick, x, y, sigma=dy,
-                                   p0=p0, absolute_sigma=True, maxfev=100000)
-            cvar = np.diag(cvar)
-        except Exception:
-            popt = [np.nan, np.nan, np.nan, np.nan]
-            cvar = popt.copy()
-        if return_uncertainty:
-            return popt, np.sqrt(cvar)
-        return popt
-
-    @staticmethod
-    def _get_gaussian_center(x, y, dy=None, return_uncertainty=None):
-        """Return the line center from a Gaussian fit to the spectrum."""
-        if return_uncertainty is None:
-            return_uncertainty = dy is not None
-        popt, cvar = annulus._fit_gaussian(x, y, dy, return_uncertainty=True)
-        if np.isfinite(popt[0]):
-            if return_uncertainty:
-                return popt[0], cvar[0]
-            return popt[0]
-        return x[np.argmax(y)], np.diff(x).mean()
-
-    # -- Line Profile Functions -- #
-
-    @staticmethod
-    def _gaussian(x, x0, dV, Tb):
-        """Gaussian function."""
-        return Tb * np.exp(-np.power((x - x0) / dV, 2.0))
-
-    @staticmethod
-    def _gaussian_thick(x, x0, dV, Tex, tau0):
-        """Optically thick Gaussian line."""
-        tau = annulus._gaussian(x, x0, dV, tau0)
-        return Tex * (1. - np.exp(-tau))
-
-    @staticmethod
-    def _SHO(x, A, y0):
-        """Simple harmonic oscillator."""
-        return A * np.cos(x) + y0
-
-    @staticmethod
-    def _SHOb(x, A, y0, dx):
-        """Simple harmonic oscillator with offset."""
-        return A * np.cos(x + dx) + y0
-
-    @staticmethod
-    def _dSHO(x, A, B, y0):
-        """Two orthogonal simple harmonic oscillators."""
-        return A * np.cos(x) + B * np.sin(x) + y0
 
     # -- Deprojection Functions -- #
 
@@ -938,7 +846,8 @@ class annulus(object):
                              for s in self.spectra]).T
             vmax, dvmax = vmax[0], vmax[1]
         elif method == 'gaussian':
-            vmax = [annulus._get_gaussian_center(self.velax, s, self.rms)
+            from .helper_functions import get_gaussian_center
+            vmax = [get_gaussian_center(self.velax, s, self.rms)
                     for s in self.spectra]
             vmax, dvmax = np.array(vmax).T
 
@@ -1038,7 +947,8 @@ class annulus(object):
         if not fit:
             return vrot, vrad, vlsr
         try:
-            return curve_fit(annulus._dSHO, self.theta, vpeaks,
+            from .helper_functions import SHO_double
+            return curve_fit(SHO_double, self.theta, vpeaks,
                              p0=[vrot, vrad, vlsr], maxfev=10000)[0]
         except Exception:
             return vrot, vrad, vlsr
@@ -1201,6 +1111,8 @@ class annulus(object):
         """
         Plot the measured line centroids as a function of polar angle.
         """
+
+        from .helper_functions import SHO_double
         if ax is None:
             fig, ax = plt.subplots()
         else:
@@ -1239,7 +1151,7 @@ class annulus(object):
                 dv_p, dvlar = cvar
                 v_r = 0.0
 
-            v0mod = annulus._dSHO(self.theta_grid, v_p, v_r, vlsr)
+            v0mod = SHO_double(self.theta_grid, v_p, v_r, vlsr)
             ax.plot(np.degrees(self.theta_grid), v0mod, lw=1.0, ls='--',
                     color='r', zorder=L[0].get_zorder()-10)
 

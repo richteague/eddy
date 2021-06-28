@@ -259,6 +259,117 @@ class rotationmap(datacube):
 
         return to_return if len(to_return) > 1 else to_return[0]
 
+    def fit_annuli(self, rpnts=None, rbins=None, x0=0.0, y0=0.0, inc=0.0,
+                   PA=0.0, z0=None, psi=None, r_cavity=None, r_taper=None,
+                   q_taper=None, w_i=None, w_r=None, w_t=None, z_func=None,
+                   shadowed=False, phi_min=None, phi_max=None,
+                   exclude_phi=False, abs_phi=False, mask_frame='disk',
+                   user_mask=None, fit_vrad=True, deproject=False,
+                   optimize_kwargs=None):
+        """
+        Return the SHO fits to each annulus.
+
+        Args:
+            TBD
+
+        Returns:
+            TBD
+        """
+
+        # Get the radial binning and deprojected phi values.
+
+        rpnts, rbins = self._get_radial_bins(rpnts=rpnts, rbins=rbins)
+        pvals = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0, psi=psi,
+                                 r_cavity=r_cavity, r_taper=r_taper,
+                                 q_taper=q_taper, w_i=w_i, w_r=w_r, w_t=w_t,
+                                 z_func=z_func, shadowed=shadowed)[1]
+
+        # Cycle through each annulus to include the fit.
+
+        fits, uncertainty = [], []
+        for r_min, r_max in zip(rbins[:-1], rbins[1:]):
+
+            # Define the annulus mask. If there are no pixels in it, continue
+            # to the next annulus.
+
+            try:
+                mask = self.get_mask(r_min=r_min, r_max=r_max, phi_min=phi_min,
+                                     phi_max=phi_max, exclude_phi=exclude_phi,
+                                     abs_phi=abs_phi, x0=x0, y0=y0, inc=inc,
+                                     PA=PA, z0=z0, psi=psi, r_cavity=r_cavity,
+                                     r_taper=r_taper, q_taper=q_taper, w_i=w_i,
+                                     w_r=w_r, w_t=w_t, z_func=z_func,
+                                     shadowed=shadowed, mask_frame=mask_frame,
+                                     user_mask=user_mask)
+            except ValueError:
+                popt = np.ones(3 if fit_vrad else 2) * np.nan
+                fits += [popt]
+                uncertainty += [popt]
+                continue
+
+            # Extract the finite pixels.
+
+            x = pvals.copy()[mask].flatten()
+            y = self.data.copy()[mask].flatten()
+            dy = self.error.copy()[mask].flatten()
+            isfinite = np.isfinite(y) & np.isfinite(dy)
+            x, y, dy = x[isfinite], y[isfinite], dy[isfinite]
+
+            # Fit the pixels, and correct the radial velocity to have positive
+            # velocities describining motions away from the star.
+
+            popt, cvar = self._fit_SHO(x=x, y=y, dy=dy,
+                                       fit_vrad=fit_vrad,
+                                       optimize_kwargs=optimize_kwargs)
+
+            if fit_vrad and inc >= 0.0:
+                popt[1] *= -1.0
+
+            fits += [popt]
+            uncertainty += [cvar]
+
+        fits = np.squeeze(fits).T
+        uncertainty = np.squeeze(uncertainty).T
+
+        if deproject:
+            popt[:-1] /= np.sin(abs(np.radians(inc)))
+            cvar[:-1] /= np.sin(abs(np.radians(inc)))
+
+        return rpnts, fits, uncertainty
+
+    def _fit_SHO(self, x, y, dy, fit_vrad=True, optimize_kwargs=None):
+        """Fit the points with a simple harmonic oscillator."""
+        from .helper_functions import SHO_double, SHO
+        from scipy.optimize import curve_fit
+        optimize_kwargs = {} if optimize_kwargs is None else optimize_kwargs
+        optimize_kwargs['absolute_sigma'] = True
+        optimize_kwargs['maxfev'] = optimize_kwargs.pop('maxfev', 10000)
+        try:
+            v_p, v_lsr = 0.5 * (y.max() - y.min()), y.mean()
+            p0 = [v_p, 0.0, v_lsr] if fit_vrad else [v_p, v_lsr]
+            popt, cvar = curve_fit(SHO_double if fit_vrad else SHO,
+                                   x, y, sigma=dy, p0=p0,
+                                   **optimize_kwargs)
+        except (ValueError, TypeError):
+            popt = np.empty(3 if fit_vrad else 2)
+            cvar = popt[:, None] * popt[None, :]
+        return popt, np.diag(cvar)**0.5
+
+    def _get_radial_bins(self, rpnts=None, rbins=None):
+        """Return default radial bins."""
+        if rpnts is None and rbins is None:
+            rbins = np.arange(self.bmaj / 2, self.xaxis[0], self.bmaj / 4)
+            rpnts = np.mean([rbins[1:], rbins[:-1]], axis=0)
+        elif rpnts is None:
+            rpnts = np.mean([rbins[1:], rbins[:-1]], axis=0)
+        else:
+            dr = np.diff(rpnts) / 2.0
+            dr = np.insert(dr, -1, dr[-1])
+            if not np.all(np.isclose(dr, dr[0])):
+                print("WARNING: Non-linear `rpnts` found. Check results!")
+            rbins = np.insert(rpnts + dr, 0, rpnts[0] - dr[0])
+        return rpnts, rbins
+
     def set_prior(self, param, args, type='flat'):
         """
         Set the prior for the given parameter. There are two types of priors

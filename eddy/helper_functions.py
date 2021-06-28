@@ -1,9 +1,10 @@
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
+from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as np
 
 
-# -- MCMC FUNCTIONS -- #
+# -- MCMC / OPTIMIZATION FUNCTIONS -- #
 
 def random_p0(p0, scatter, nwalkers):
     """Introduce scatter to starting positions."""
@@ -11,6 +12,97 @@ def random_p0(p0, scatter, nwalkers):
     dp0 = np.random.randn(nwalkers * len(p0)).reshape(nwalkers, len(p0))
     dp0 = np.where(p0 == 0.0, 1.0, p0)[None, :] * (1.0 + scatter * dp0)
     return np.where(p0[None, :] == 0.0, dp0 - 1.0, dp0)
+
+
+def fit_gaussian(x, y, dy=None, return_uncertainty=None):
+    """Fit a gaussian to (x, y, [dy])."""
+    if return_uncertainty is None:
+        return_uncertainty = dy is not None
+    dy = dy * np.ones(x.size) if dy is not None else dy
+    try:
+        popt, cvar = curve_fit(gaussian, x, y, sigma=dy,
+                               p0=get_p0_gaussian(x, y),
+                               absolute_sigma=True, maxfev=100000)
+        cvar = np.diag(cvar)
+    except Exception:
+        popt = [np.nan, np.nan, np.nan]
+        cvar = popt.copy()
+    return (popt, np.sqrt(cvar)) if return_uncertainty else popt
+
+
+def fit_gaussian_thick(x, y, dy=None, return_uncertainty=None):
+    """Fit an optically thick Gaussian function to (x, y, [dy])."""
+    if return_uncertainty is None:
+        return_uncertainty = dy is not None
+    dy = dy * np.ones(x.size) if dy is not None else dy
+    p0 = fit_gaussian(x=x, y=y, dy=dy, return_uncertainty=False)
+    p0 = np.append(p0, 1.0)
+    try:
+        popt, cvar = curve_fit(gaussian_thick, x, y, sigma=dy,
+                               p0=p0, absolute_sigma=True, maxfev=100000)
+        cvar = np.diag(cvar)
+    except Exception:
+        popt = [np.nan, np.nan, np.nan, np.nan]
+        cvar = popt.copy()
+    return (popt, np.sqrt(cvar)) if return_uncertainty else popt
+
+
+def get_gaussian_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
+    """Return the line center from a Gaussian fit to the spectrum."""
+    if return_uncertainty is None:
+        return_uncertainty = dy is not None
+    popt, cvar = fit_gaussian(x, y, dy, return_uncertainty=True)
+    if np.isfinite(popt[0]):
+        return (popt[0], cvar[0]) if return_uncertainty else popt[0]
+    return fill
+
+
+def get_gaussian_width(x, y, dy=None, return_uncertainty=None, fill=1e50):
+    """Return the absolute width of a Gaussian fit to the spectrum."""
+    if return_uncertainty is None:
+        return_uncertainty = dy is not None
+    popt, cvar = fit_gaussian(x, y, dy, return_uncertainty=True)
+    if np.isfinite(popt[1]):
+        return (popt[1], cvar[1]) if return_uncertainty else popt[1]
+    return fill
+
+
+def get_p0_gaussian(x, y):
+    """Estimate (x0, dV, Tb) for the spectrum."""
+    if x.size != y.size:
+        raise ValueError("Mismatch in array shapes.")
+    Tb = np.max(y)
+    x0 = x[y.argmax()]
+    dV = np.trapz(y, x) / Tb / np.sqrt(2. * np.pi)
+    return x0, dV, Tb
+
+
+# -- MODEL FUNCTIONS --#
+
+def gaussian(x, x0, dV, Tb):
+    """Gaussian function."""
+    return Tb * np.exp(-np.power((x - x0) / dV, 2.0))
+
+
+def gaussian_thick(x, x0, dV, Tex, tau0):
+    """Optically thick Gaussian line."""
+    tau = gaussian(x, x0, dV, tau0)
+    return Tex * (1. - np.exp(-tau))
+
+
+def SHO(x, A, y0):
+    """Simple harmonic oscillator."""
+    return A * np.cos(x) + y0
+
+
+def SHO_offset(x, A, y0, dx):
+    """Simple harmonic oscillator with offset."""
+    return A * np.cos(x + dx) + y0
+
+
+def SHO_double(x, A, B, y0):
+    """Two orthogonal simple harmonic oscillators."""
+    return A * np.cos(x) + B * np.sin(x) + y0
 
 
 # -- PLOTTING FUNCTIONS -- #
