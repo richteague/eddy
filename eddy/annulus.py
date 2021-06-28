@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import zeus
+import time
 import emcee
 import numpy as np
 import matplotlib.pyplot as plt
@@ -99,10 +100,9 @@ class annulus(object):
     # -- Measure the Velocity -- #
 
     def get_vlos(self, p0=None, fit_method='SHO', fit_vrad=False,
-                 resample=False, optimize=True, nwalkers=32, nburnin=500,
+                 resample=None, optimize=True, nwalkers=32, nburnin=500,
                  nsteps=500, scatter=1e-3, signal='int', optimize_kwargs=None,
-                 plots=None, returns=None, mcmc='emcee', mcmc_kwargs=None,
-                 centroid_method='quadratic'):
+                 mcmc='emcee', mcmc_kwargs=None, centroid_method='quadratic'):
         """
         Infer the requested velocities by shifting lines back to a common
         center and stacking. The quality of fit is given by the selected
@@ -139,7 +139,6 @@ class annulus(object):
             scatter (optional[float]): Scatter applied to the starting
                 positions before running the MCMC.
             plots (optional[list]):
-            returns (optional[list]):
 
         Returns:
             Either the samples of the posterior for each free parameter, or the
@@ -161,33 +160,41 @@ class annulus(object):
 
         # Run the appropriate methods.
         if fit_method == 'gp':
-            return self._fitting_GP(p0=p0, fit_vrad=fit_vrad,
+            resample = False if resample is None else resample
+            popt = self.get_vlos_GP(p0=p0, fit_vrad=fit_vrad,
                                     nwalkers=nwalkers, nsteps=nsteps,
                                     nburnin=nburnin, scatter=scatter,
-                                    plots=plots, returns=returns,
+                                    plots='none', returns='percentiles',
                                     resample=resample, mcmc=mcmc,
                                     optimize_kwargs=optimize_kwargs,
                                     mcmc_kwargs=mcmc_kwargs)
+            cvar = 0.5 * (popt[:, 2] - popt[:, 0])
+            popt = popt[:, 1]
+            return (popt[:2], cvar[:2]) if fit_vrad else (popt[0], cvar[0])
 
         elif fit_method == 'dv':
-            return self._fitting_dV(p0=p0, fit_vrad=fit_vrad,
+            resample = True if resample is None else resample
+            popt = self.get_vlos_dV(p0=p0, fit_vrad=fit_vrad,
                                     resample=resample,
                                     optimize_kwargs=optimize_kwargs)
+            return popt[:2] if fit_vrad else popt[0]
 
         elif fit_method == 'snr':
-            return self._fitting_SNR(p0=p0, fit_vrad=fit_vrad,
+            resample = True if resample is None else resample
+            popt = self.get_vlos_SNR(p0=p0, fit_vrad=fit_vrad,
                                      resample=resample, signal=signal,
                                      optimize_kwargs=optimize_kwargs)
+            return popt[:2] if fit_vrad else popt[0]
 
         elif fit_method == 'sho':
-            popt, cvar = self.fit_SHO(p0=p0, fit_vrad=fit_vrad,
-                                      centroid_method=centroid_method,
-                                      optimize_kwargs=optimize_kwargs)
-            return popt[:(1 + int(fit_vrad))], cvar[:(1 + int(fit_vrad))]
+            popt, cvar = self.get_vlos_SHO(p0=p0, fit_vrad=fit_vrad,
+                                           centroid_method=centroid_method,
+                                           optimize_kwargs=optimize_kwargs)
+            return (popt[:2], cvar[:2]) if fit_vrad else (popt[0], cvar[0])
 
     # -- Gaussian Processes Approach -- #
 
-    def _fitting_GP(self, p0=None, fit_vrad=False, optimize=False, nwalkers=64,
+    def get_vlos_GP(self, p0=None, fit_vrad=False, optimize=False, nwalkers=64,
                     nburnin=50, nsteps=100, resample=False, scatter=1e-3,
                     niter=1, plots=None, returns=None, mcmc='emcee',
                     optimize_kwargs=None, mcmc_kwargs=None):
@@ -280,6 +287,7 @@ class annulus(object):
                 samples = sampler.chain[-int(nsteps[n % nsteps.size]):]
             samples = samples.reshape(-1, samples.shape[-1])
             p0 = np.median(samples, axis=0)
+            time.sleep(0.5)
 
         # Diagnosis plots if appropriate.
 
@@ -524,7 +532,7 @@ class annulus(object):
 
     # -- Minimizing Line Width Approach -- #
 
-    def _fitting_dV(self, p0=None, fit_vrad=False, resample=False,
+    def get_vlos_dV(self, p0=None, fit_vrad=False, resample=False,
                     optimize_kwargs=None):
         """
         Wrapper for the dV fitting.
@@ -587,8 +595,8 @@ class annulus(object):
 
     # -- Rotation Velocity by Fitting a SHO -- #
 
-    def fit_SHO(self, p0=None, fit_vrad=False, centroid_method='quadratic',
-                optimize_kwargs=None):
+    def get_vlos_SHO(self, p0=None, fit_vrad=False,
+                     centroid_method='quadratic', optimize_kwargs=None):
         """
         Infer the rotation velocity by finding velocity which best describes
         the azimuthal dependence of the line centroid modelled as a simple
@@ -630,7 +638,7 @@ class annulus(object):
 
     # -- Rotation Velocity by Maximizing SNR -- #
 
-    def _fitting_SNR(self, p0=None, fit_vrad=False, resample=False,
+    def get_vlos_SNR(self, p0=None, fit_vrad=False, resample=False,
                      signal='int', optimize_kwargs=None):
         """
         Infer the rotation velocity by finding the rotation velocity which,
@@ -660,11 +668,13 @@ class annulus(object):
         """
 
         # Make sure the signal is defined.
+
         if signal not in ['max', 'int', 'weighted']:
             raise ValueError("'signal' must be either 'max', 'int', "
                              + "or 'weighted'.")
 
         # Starting positions.
+
         if p0 is None:
             p0 = self.guess_parameters(fit=True)[:2]
             if not fit_vrad:
@@ -672,6 +682,7 @@ class annulus(object):
         p0 = np.atleast_1d(p0)
 
         # Populate the kwargs.
+
         optimize_kwargs = {} if optimize_kwargs is None else optimize_kwargs
         optimize_kwargs['method'] = optimize_kwargs.get('method', 'L-BFGS-B')
         options = optimize_kwargs.pop('options', {})
@@ -681,12 +692,14 @@ class annulus(object):
         optimize_kwargs['options'] = options
 
         # Define the bounds.
+
         bounds = [[0.7 * p0[0], 1.3 * p0[0]]]
         if fit_vrad:
             bounds += [[-0.3 * p0[0], 0.3 * p0[0]]]
         optimize_kwargs['bounds'] = np.array(bounds)
 
         # Run the minimization.
+
         res = minimize(self.deprojected_nSNR, x0=p0,
                        args=(fit_vrad, resample, signal),
                        **optimize_kwargs)
@@ -1140,13 +1153,13 @@ class annulus(object):
             # Fit the data.
 
             if fit_vrad:
-                popt, cvar = self.fit_SHO(fit_vrad=True,
-                                          centroid_method=centroid_method)
+                popt, cvar = self.get_vlos_SHO(fit_vrad=True,
+                                               centroid_method=centroid_method)
                 v_p, v_r, vlsr = popt
                 dv_p, dv_r, dvlsr = cvar
             else:
-                popt, cvar = self.fit_SHO(fit_vrad=False,
-                                          centroid_method=centroid_method)
+                popt, cvar = self.get_vlos_SHO(fit_vrad=False,
+                                               centroid_method=centroid_method)
                 v_p, vlsr = popt
                 dv_p, dvlar = cvar
                 v_r = 0.0

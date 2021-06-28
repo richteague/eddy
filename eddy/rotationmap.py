@@ -460,7 +460,7 @@ class rotationmap(datacube):
             print("WARNING: scipy.optimize did not converge.")
             print("Starting positions:")
         print('\tp0 =', ['%.2e' % t for t in theta])
-        time.sleep(.3)
+        time.sleep(0.3)
         return theta
 
     def _run_mcmc(self, p0, params, nwalkers, nburnin, nsteps, mcmc, **kwargs):
