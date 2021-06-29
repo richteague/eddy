@@ -57,6 +57,16 @@ def get_gaussian_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
     return fill
 
 
+def get_gaussthick_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
+    """Return the line center from a Gaussian fit to the spectrum."""
+    if return_uncertainty is None:
+        return_uncertainty = dy is not None
+    popt, cvar = fit_gaussian_thick(x, y, dy, return_uncertainty=True)
+    if np.isfinite(popt[0]):
+        return (popt[0], cvar[0]) if return_uncertainty else popt[0]
+    return fill
+
+
 def get_gaussian_width(x, y, dy=None, return_uncertainty=None, fill=1e50):
     """Return the absolute width of a Gaussian fit to the spectrum."""
     if return_uncertainty is None:

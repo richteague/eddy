@@ -39,8 +39,68 @@ class linecube(datacube):
         the assumption that the disk is azimuthally symmetric (at least across
         the regions extracted).
 
+        Several different inference methods can be used through the
+        ``fit_method`` argument:
+
+            - ``'GP'``:  Models the aligned and stacked spectrum as a Gaussian
+                         Process to remain agnostic about the underlying true
+                         line profile. This is the default.
+            - ``'dV'``:  Minimize the line width of the aligned and stacked
+                         spectrum. Assumes the underyling profile is a
+                         Gaussian.
+            - ``'SNR'``: Maximizes the SNR of the aligned and stacked spectrum.
+                         Assumes the underlying profile is a Gaussian.
+            - ``'SHO'``: Fits the azimuthal dependence of the line centroids
+                         with a simple harmonic oscillator. Requires a choice
+                         of ``centroid_method`` to determine the line centers.
+
+        By default, these methods are applied to annuli across the whole radial
+        and azimuthal range of the disk. Masks can be adopted, either limiting
+        or excluding azimuthal regions, or a user-defined mask can be provided.
+
+        Boostrapping is possible (multiple iterations using random draws) to
+        estimate the uncertainties on the velocities which may be
+        underestimated with a single interation.
+
         Args:
-            TBD
+            rbins (Optional[arr]): Array of bin edges of the annuli.
+            fit_method (Optional[str]): Method used to infer the velocities.
+            fit_vrad (Optional[bool]): Whether to include radial velocities in
+                the fit.
+            x0 (Optional[float]): Source right ascension offset [arcsec].
+            y0 (Optional[float]): Source declination offset [arcsec].
+            inc (Optional[float]): Source inclination [degrees]. A positive
+                inclination denotes a disk rotating clockwise on the sky, while
+                a negative inclination represents a counter-clockwise rotation.
+            PA (Optional[float]): Source position angle [degrees]. Measured
+                between north and the red-shifted semi-major axis in an
+                easterly direction.
+            z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
+                To get the far side of the disk, make this number negative.
+            psi (Optional[float]): Flaring angle for the emission surface.
+            z1 (Optional[float]): Correction term for ``z0``.
+            phi (Optional[float]): Flaring angle correction term for the
+                emission surface.
+            r_cavity (Optional[float]): Outer radius of a cavity. Within this
+                region the emission surface is taken to be zero.
+            w_i (Optional[float]): Warp inclination in [degrees] at the disk
+                center.
+            w_r (Optional[float]): Scale radius of the warp in [arcsec].
+            w_t (Optional[float]): Angle of nodes of the warp in [degrees].
+            z_func=None,
+            shadowed=False,
+            phi_min=None,
+            phi_max=None,
+            exclude_phi=False,
+            abs_phi=False,
+            mask_frame='disk',
+            user_mask=None,
+            beam_spacing=True,
+            deproject=False,
+            niter=1,
+            get_vlos_kwargs=None,
+            weighted_average=True,
+            return_samples=False
 
         Returns:
             TBD
@@ -79,6 +139,9 @@ class linecube(datacube):
                                           get_vlos_kwargs=get_vlos_kwargs)
 
         # Multiple iterations.
+
+        if beam_spacing == False:
+            raise ValueError("niter must equal 1 when beam_spacing=False.")
 
         samples = [self._velocity_profile(rbins=rbins,
                                           fit_method=fit_method,
@@ -206,8 +269,13 @@ class linecube(datacube):
                 profiles += [output[:par, 1]]
                 uncertainties += [0.5 * (output[:par, 2] - output[:par, 0])]
 
-        profiles = np.atleast_2d(profiles).T
-        uncertainties = np.atleast_2d(uncertainties).T
+        # Make sure the returned arrays are in the (nparam, nrad) form.
+
+        profiles = np.atleast_2d(profiles)
+        uncertainties = np.atleast_2d(uncertainties)
+        if profiles.shape[0] == rpnts.size:
+            profiles = profiles.T
+            uncertainties = uncertainties.T
 
         # Deproject the velocity profiles.
 

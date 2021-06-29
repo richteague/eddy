@@ -50,7 +50,7 @@ class datacube(object):
 
     def disk_coords(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=None, psi=None,
                     r_cavity=0.0, r_taper=None, q_taper=None, w_i=0.0, w_r=1.0,
-                    w_t=0.0, outframe='cylindrical', z_func=None,
+                    w_t=0.0, z_func=None, outframe='cylindrical',
                     shadowed=False, **_):
         r"""
         Get the disk coordinates given certain geometrical parameters and an
@@ -61,13 +61,14 @@ class datacube(object):
 
             z(r) = z_0 \times \left(\frac{r}{1^{\prime\prime}}\right)^{\psi}
 
-        where ``z0`` and ``psi`` can be provided by the user. With the increase
-        in spatial resolution afforded by interferometers such as ALMA there
-        are a couple of modifications that can be used to provide a better
-        match to the data.
+        where ``z0`` and ``psi`` can be provided by the user. For the case of
+        a non-zero ``z0``, but ``psi=1``, we recover the conical surface
+        described in Rosenfeld et al. (2013).
 
-        An inner cavity can be included with the ``r_cavity`` argument which
-        makes the transformation:
+        With the increase in spatial resolution afforded by interferometers
+        such as ALMA there are a couple of modifications that can be used to
+        provide a better match to the data. For example, an inner cavity can be
+        included with the ``r_cavity`` argument which makes the transformation:
 
         .. math::
 
@@ -88,6 +89,19 @@ class datacube(object):
 
         where both ``r_taper`` and ``q_taper`` values must be set.
 
+        If the emission surface is more complex than the analytical form
+        described above, users may provide their own function, ``z_func``,
+        which should return the emission height in [arcsec] for a midplane
+        radius in [arcsec].
+
+        For certain emission surfaces and high inclination disks, the
+        transformation from on-sky coordinates to disk-frame coordinates can be
+        hindered by the shadowing of certain regions of the disk. This is a
+        particularly big problem if the emission surface is not monotonically
+        increasing with radius. For some instances, the default deprojection
+        algorithm will fail, and a more robust, albeit slower, algormith is
+        needed. This can be turned on with ``shadowed=True``.
+
         We can also include a warp which is parameterized by,
 
         .. math::
@@ -107,28 +121,39 @@ class datacube(object):
             for the inference through ``self.flared_niter`` (by default at
             5). For high inclinations, also set ``shadowed=True``.
 
+        As it is also possible to determine the rotation direction of the disk
+        on the sky, we can encode this information in the sign of the
+        inclination. A positive inclination describes a clockwise rotating
+        disk, while a negative inclination describes an anti-clockwise rotating
+        disk. For 2D disks, i.e., those without an emission surface, this will
+        not make a difference, but for 3D disks, this will dictate the
+        projection of the surface on the sky.
+
         Args:
-            x0 (optional[float]): Source right ascension offset [arcsec].
-            y0 (optional[float]): Source declination offset [arcsec].
-            inc (optional[float]): Source inclination [degrees]. A positive
+            x0 (Optional[float]): Source right ascension offset [arcsec].
+            y0 (Optional[float]): Source declination offset [arcsec].
+            inc (Optional[float]): Source inclination [degrees]. A positive
                 inclination denotes a disk rotating clockwise on the sky, while
                 a negative inclination represents a counter-clockwise rotation.
-            PA (optional[float]): Source position angle [degrees]. Measured
+            PA (Optional[float]): Source position angle [degrees]. Measured
                 between north and the red-shifted semi-major axis in an
                 easterly direction.
-            z0 (optional[float]): Aspect ratio at 1" for the emission surface.
+            z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
                 To get the far side of the disk, make this number negative.
-            psi (optional[float]): Flaring angle for the emission surface.
-            z1 (optional[float]): Correction term for ``z0``.
-            phi (optional[float]): Flaring angle correction term for the
+            psi (Optional[float]): Flaring angle for the emission surface.
+            z1 (Optional[float]): Correction term for ``z0``.
+            phi (Optional[float]): Flaring angle correction term for the
                 emission surface.
-            r_cavity (optional[float]): Outer radius of a cavity. Within this
+            r_cavity (Optional[float]): Outer radius of a cavity. Within this
                 region the emission surface is taken to be zero.
-            w_i (optional[float]): Warp inclination in [degrees] at the disk
+            w_i (Optional[float]): Warp inclination in [degrees] at the disk
                 center.
-            w_r (optional[float]): Scale radius of the warp in [arcsec].
-            w_t (optional[float]): Angle of nodes of the warp in [degrees].
-            outframe (optional[str]): Frame of reference for the returned
+            w_r (Optional[float]): Scale radius of the warp in [arcsec].
+            w_t (Optional[float]): Angle of nodes of the warp in [degrees].
+            z_func (Optional[callable]): A user-defined emission surface
+                function that will return ``z`` in [arcsec] for a given ``r``
+                in [arcsec]. This will override the analytical form.
+            outframe (Optional[str]): Frame of reference for the returned
                 coordinates. Either ``'cartesian'`` or ``'cylindrical'``.
 
         Returns:
@@ -363,6 +388,8 @@ class datacube(object):
             z_func (Optional[function]): A function which provides
                 :math:`z(r)`. Note that no checking will occur to make sure
                 this is a valid function.
+            shadowed (Optional[bool]): Whether to use the slower, but more
+                robust, deprojection method for shadowed disks.
 
         Returns:
             A 2D array mask matching the shape of a channel.
@@ -820,13 +847,18 @@ class datacube(object):
 
     def plot_maximum(self, ax=None, imshow_kwargs=None, return_fig=False):
         """
-        Plot the maximum value along each spcetrum.
+        Plot the maximum value along each spectrum.
 
         Args:
-            TBD
+            ax (Optional[matplotlib axis]): Axis used for the plotting.
+            imshow_kwargs (Optional[dict]): Kwargs to pass to
+                ``matplotlib.imshow``.
+            return_fig (Optional[bool]): Whether to return the figure instance.
+                If an axis was provided, this will always be ``False``.
 
         Returns:
-            TBD
+            fig (matplotlib figure): If ``return_fig=True``, will return the
+                figure for continued plotting.
         """
 
         # Dummy axis to overplot.

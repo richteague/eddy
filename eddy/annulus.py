@@ -154,7 +154,7 @@ class annulus(object):
         # Check the input variables.
         fit_method = fit_method.lower()
         if fit_method not in ['dv', 'gp', 'snr', 'sho']:
-            raise ValueError("method must be 'dV', 'GP' or 'SNR'.")
+            raise ValueError("method must be 'dV', 'GP', 'SNR' or 'SHO'.")
         if fit_method == 'gp' and not celerite_installed:
             raise ImportError("Must install 'celerite' to use GP method.")
 
@@ -623,12 +623,12 @@ class annulus(object):
             p0 = [v_p, 0.0, v_lsr] if fit_vrad else [v_p, v_lsr]
         assert len(p0) == 3 if fit_vrad else 2
         optimize_kwargs = {} if optimize_kwargs is None else optimize_kwargs
+        optimize_kwargs['sigma'] = dv0
         optimize_kwargs['absolute_sigma'] = True
         optimize_kwargs['maxfev'] = optimize_kwargs.pop('maxfev', 10000)
         try:
             popt, cvar = curve_fit(SHO_double if fit_vrad else SHO,
-                                   self.theta, v0, sigma=dv0,
-                                   **optimize_kwargs)
+                                   self.theta, v0, **optimize_kwargs)
         except TypeError:
             popt = np.empty(2 if fit_vrad else 1)
             cvar = popt[:, None] * popt[None, :]
@@ -829,16 +829,19 @@ class annulus(object):
         return self._resample_spectra(vpnts, spnts, resample=resample,
                                       scatter=scatter)
 
-    def line_centroids(self, method='max'):
+    def line_centroids(self, method='quadratic'):
         """
-        Return the velocities of the peak pixels.
+        Returns the line centroid for each of the spectra in the annulus.
+        Various methods of determining the centroid are possible accessible
+        through the ``method`` argument.
 
         Args:
             method (str): Method used to determine the line centroid. Must be
-                in ['max', 'quadratic', 'gaussian']. The former returns the
-                pixel of maximum value, 'quadratic' fits a quadratic to the
-                pixel of maximum value and its two neighbouring pixels (see
-                Teague & Foreman-Mackey 2018 for details) and 'gaussian' fits a
+                in ['max', 'quadratic', 'gaussian', 'gaussthick']. The former
+                returns the pixel of maximum value, 'quadratic' fits a
+                quadratic function to the pixel of maximum value and its two
+                neighbouring pixels (see Teague & Foreman-Mackey 2018 for
+                details) and 'gaussian' and 'gaussthick' fits an analytical
                 Gaussian profile to the line.
 
         Returns:
@@ -863,7 +866,11 @@ class annulus(object):
             vmax = [get_gaussian_center(self.velax, s, self.rms)
                     for s in self.spectra]
             vmax, dvmax = np.array(vmax).T
-
+        elif method == 'gaussthick':
+            from .helper_functions import get_gaussthick_center
+            vmax = [get_gaussthick_center(self.velax, s, self.rms)
+                    for s in self.spectra]
+            vmax, dvmax = np.array(vmax).T
         else:
             raise ValueError("method is not 'max', 'gaussian' or 'quadratic'.")
         return vmax, dvmax
@@ -902,7 +909,7 @@ class annulus(object):
             if not resample:
                 if not scatter:
                     return vpnts, spnts
-                return vpnts, spnts, np.zeros(vpnts.size)
+                return vpnts, spnts, np.ones(vpnts.size) * np.nan
         if isinstance(resample, (int, bool)):
             bins = int(self.velax.size * int(resample) + 1)
             bins = np.linspace(self.velax[0], self.velax[-1], bins)
@@ -1115,6 +1122,100 @@ class annulus(object):
         ax.set_xlabel('Velocity (m/s)')
         ax.set_ylabel('Intensity (Jy/beam)')
         ax.set_xlim(self.velax[0], self.velax[-1])
+        if return_fig:
+            return fig
+
+    def plot_spectrum(self, vrot=0.0, vrad=0.0, resample=True, plot_fit=False,
+                      ax=None, return_fig=False, plot_kwargs=None):
+        """
+        Plot the aligned and stacked spectrum.
+
+        Args:
+            vrot (Optional[float]): Projected rotation velocity in [m/s].
+            vrad (Optional[float]): Projected radial velocity in [m/s].
+            resample (Optional[int/float/bool]): Resampling option. See
+                ``annulus.deprojected_spectrum`` for more details.
+            plot_fit (Optional[bool/str]): Whether to overplot a fit to the
+                data. If ``True``, will fit a Gaussian profile, if
+                ``'gaussthick'``, will fit an optically thick Gaussian profile.
+            ax (Optional[matplotlib axis]): Axis onto which the data will be
+                plotted. If ``None``, a new matplotlib figure will be made.
+            return_fig (Optional[bool]): Whether to return the new matplotlib
+                figure if an ``ax`` was not provided.
+            plot_kwargs (Optional[dict]): Kwargs to be passed to
+                ``matplotlib.errorbar`` and ``matplotlib.step``.
+
+        Returns:
+            fig (matplotlib figure) if ``return_fig=True``.
+        """
+
+        # Get the deprojected spectrum and transform to mJy/beam.
+
+        x, y, dy = self.deprojected_spectrum(vrot=vrot,
+                                             vrad=vrad,
+                                             resample=resample)
+        y, dy = y * 1e3, dy * 1e3
+
+        # Matplotlib Axes
+
+        if ax is None:
+            fig, ax = plt.subplots()
+        else:
+            return_fig = False
+
+        # Set the plotting defaults.
+
+        kw = {}
+        plot_kwargs = {} if plot_kwargs is None else plot_kwargs
+        kw['c'] = plot_kwargs.pop('c', plot_kwargs.pop('color', None))
+        kw['c'] = '0.8' if plot_fit else '0.0' if kw['c'] is None else kw['c']
+        kw['lw'] = plot_kwargs.pop('lw', plot_kwargs.pop('linewidth', 1.0))
+        cs = plot_kwargs.pop('capsize', kw['lw'] * 2.0)
+        ct = plot_kwargs.pop('capthick', kw['lw'])
+        xlim = plot_kwargs.pop('xlim', (x.min(), x.max()))
+        ylim = plot_kwargs.pop('ylim', None)
+
+        # Plot the spectrum.
+
+        L = ax.errorbar(x, y, dy, fmt=' ', capsize=cs, capthick=ct, **kw)
+        ax.step(x, y, where='mid', zorder=L[0].get_zorder()+1, **kw)
+        ax.set_xlabel('Velocity (m/s)')
+        ax.set_ylabel('Intensity (mJy/beam)')
+        ax.set_ylim(ylim)
+        ax.set_xlim(xlim)
+
+        # Fit the data if requested.
+
+        if plot_fit:
+            labels = [r'$v_0$', r'$\Delta V$', r'$I_{\nu}$']
+            units = ['(m/s)', '(m/s)', '(mJy/bm)']
+            plot_fit = 'gaussian' if type(plot_fit) is bool else plot_fit
+            if plot_fit == 'gaussian':
+                from .helper_functions import gaussian
+                from .helper_functions import fit_gaussian
+                popt, cvar = fit_gaussian(x, y, dy, True)
+                y_mod = gaussian(x, *popt)
+            else:
+                from .helper_functions import gaussian_thick
+                from .helper_functions import fit_gaussian_thick
+                labels += [r'$\tau$']
+                units += ['']
+                popt, cvar = fit_gaussian_thick(x, y, dy, True)
+                y_mod = gaussian_thick(x, *popt)
+
+            ax.plot(x, y_mod, color='r', lw=kw['lw'], ls='-',
+                    zorder=L[0].get_zorder()+2)
+
+            # Include the best-fit parameters.
+
+            for l, label in enumerate(labels):
+                annotation = label + ' = {:.0f}'.format(popt[l])
+                annotation += ' +/- {:.0f} {}'.format(cvar[l], units[l])
+                ax.text(0.975, 0.95 - 0.075 * l, annotation,
+                        ha='right', va='top', color='r',
+                        transform=ax.transAxes)
+
+        # Return fig.
         if return_fig:
             return fig
 
