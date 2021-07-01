@@ -155,6 +155,8 @@ class datacube(object):
                 in [arcsec]. This will override the analytical form.
             outframe (Optional[str]): Frame of reference for the returned
                 coordinates. Either ``'cartesian'`` or ``'cylindrical'``.
+            shadowed (Optional[bool]): Whether to use the slower, but more
+                robust method for deprojecting pixel values.
 
         Returns:
             array, array, array: Three coordinate arrays with ``(r, phi, z)``,

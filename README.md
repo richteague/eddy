@@ -5,7 +5,7 @@
 <a href="http://ascl.net/1901.010"><img src="https://img.shields.io/badge/ascl-1901.010-blue.svg?colorB=262255" alt="ascl:1901.010" /></a>
 [![Documentation Status](https://readthedocs.org/projects/eddy/badge/?version=latest)](https://eddy.readthedocs.io/en/latest/?badge=latest)
 
-`eddy` is a suite of Python tools to recover precise rotation profiles of protoplanetary disks from Doppler shifted line emission. `eddy` makes fitting of first moment maps and the inference of a rotation velocity from an annulus of spectra a breeze.
+`eddy` is a suite of Python tools to recover precise velocity profiles of protoplanetary disks from Doppler shifted line emission. `eddy` makes fitting of first moment maps and the inference of a rotation velocity from an annulus of spectra a breeze.
 
 ## Installation
 
@@ -15,15 +15,15 @@ The most simple method is with `pip`,
 pip install astro-eddy
 ```
 
-The only real dependencies for this are `numpy`, `scipy`, `matplotlib`, [`emcee`](https://github.com/dfm/emcee), at least v3.0 or higher if you want the fancy progress bar, and [`corner`](https://github.com/dfm/corner.py). If you want to run the Gaussian Process method you will also need [`celerite`](https://github.com/dfm/celerite) which can be easily installed if you follow their [installation guide](https://celerite.readthedocs.io/en/stable/python/install/).
+The only real dependencies for this are `numpy`, `scipy`, `matplotlib`, and [`emcee`](https://github.com/dfm/emcee), If you want to run the Gaussian Process method you will also need [`celerite`](https://github.com/dfm/celerite) which can be easily installed if you follow their [installation guide](https://celerite.readthedocs.io/en/stable/python/install/).
 
-If things have installed correctly you should be able to run the [Jupyter Notebooks](https://github.com/richteague/eddy/tree/master/docs) with no errors. If something goes wrong, please [open an issue](https://github.com/richteague/eddy/issues/new).
+If things have installed correctly you should be able to run the [Jupyter Notebooks](https://github.com/richteague/eddy/tree/master/docs/tutorials) with no errors. If something goes wrong, please [open an issue](https://github.com/richteague/eddy/issues/new).
 
 ## Useage
 
 For guides on how to use `eddy` you will find extensive examples in the [documents](https://github.com/richteague/eddy/tree/master/docs). We shamelessly recommend [bettermoments](https://github.com/richteague/bettermoments) to make the moment maps required for the fitting.
 
-## Attribution
+## Citations
 
 If you use `eddy` as part of your research, please cite the [JOSS article](http://joss.theoj.org/papers/10.21105/joss.01220):
 
@@ -47,4 +47,4 @@ A full list of citations including dependencies can be found on the [citations](
 
 ## Works using `eddy`
 
-A list of the works using (or at least citing) `eddy` can be found on [ads](https://ui.adsabs.harvard.edu/abs/2019JOSS....4.1220T/citations).
+A list of the works using (or at least citing) `eddy` can be found on [ADS](https://ui.adsabs.harvard.edu/abs/2019JOSS....4.1220T/citations).
