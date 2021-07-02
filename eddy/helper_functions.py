@@ -18,33 +18,46 @@ def fit_gaussian(x, y, dy=None, return_uncertainty=None):
     """Fit a gaussian to (x, y, [dy])."""
     if return_uncertainty is None:
         return_uncertainty = dy is not None
-    dy = dy * np.ones(x.size) if dy is not None else dy
+    dy = dy * np.ones(x.size) if dy is None else dy
+    if np.all(np.isnan(dy)):
+        dy = np.ones(x.size)
+        absolute_sigma = False
+    else:
+        absolute_sigma = True
+    p0 = get_p0_gaussian(x, y)
     try:
-        popt, cvar = curve_fit(gaussian, x, y, sigma=dy,
-                               p0=get_p0_gaussian(x, y),
-                               absolute_sigma=True, maxfev=100000)
-        cvar = np.diag(cvar)
+        popt, cvar = curve_fit(gaussian, x, y, sigma=dy, p0=p0,
+                               absolute_sigma=absolute_sigma,
+                               maxfev=100000)
+        cvar = np.diag(cvar)**0.5
     except Exception:
         popt = [np.nan, np.nan, np.nan]
         cvar = popt.copy()
-    return (popt, np.sqrt(cvar)) if return_uncertainty else popt
+    return (popt, cvar) if return_uncertainty else popt
 
 
 def fit_gaussian_thick(x, y, dy=None, return_uncertainty=None):
     """Fit an optically thick Gaussian function to (x, y, [dy])."""
     if return_uncertainty is None:
         return_uncertainty = dy is not None
-    dy = dy * np.ones(x.size) if dy is not None else dy
-    p0 = fit_gaussian(x=x, y=y, dy=dy, return_uncertainty=False)
-    p0 = np.append(p0, 1.0)
+    dy = dy * np.ones(x.size) if dy is None else dy
+    if np.all(np.isnan(dy)):
+        dy = np.ones(x.size)
+        absolute_sigma = False
+    else:
+        absolute_sigma = True
+    p0 = fit_gaussian(x=x, y=y, dy=dy,
+                      return_uncertainty=False)
+    p0 = np.append(p0, 0.5)
     try:
-        popt, cvar = curve_fit(gaussian_thick, x, y, sigma=dy,
-                               p0=p0, absolute_sigma=True, maxfev=100000)
-        cvar = np.diag(cvar)
+        popt, cvar = curve_fit(gaussian_thick, x, y, sigma=dy, p0=p0,
+                               absolute_sigma=absolute_sigma,
+                               maxfev=100000)
+        cvar = np.diag(cvar)**0.5
     except Exception:
         popt = [np.nan, np.nan, np.nan, np.nan]
         cvar = popt.copy()
-    return (popt, np.sqrt(cvar)) if return_uncertainty else popt
+    return (popt, cvar) if return_uncertainty else popt
 
 
 def get_gaussian_center(x, y, dy=None, return_uncertainty=None, fill=1e50):

@@ -1372,14 +1372,17 @@ class rotationmap(datacube):
         axs[0].xaxis.tick_top()
         axs[0].set_ylabel(r'$v_{\rm \phi,\, proj}$' + ' (m/s)')
         axs[0].set_ylim(v_phi_ylim)
+
         axs[1].errorbar(rpnts, v_rad, dv_rad, fmt='-o', ms=3)
         axs[1].set_xticklabels([])
         axs[1].set_ylabel(r'$v_{\rm rad,\, proj}$' + ' (m/s)')
         axs[1].set_ylim(v_rad_ylim)
+
         axs[2].errorbar(rpnts, v_lsr, dv_lsr, fmt='-o', ms=3)
         axs[2].set_xlabel(r'Radius (arcsec)')
         axs[2].set_ylabel(r'$v_{\rm lsr}$' + ' (m/s)')
         axs[2].set_ylim(v_lsr_ylim)
+
         for ax in axs:
             ax.grid(ls='--', color='0.9', lw=1.0)
             ax.set_xlim(rpnts.min(), rpnts.max())

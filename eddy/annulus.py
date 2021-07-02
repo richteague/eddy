@@ -905,11 +905,14 @@ class annulus(object):
             y (ndarray): Mean of the bin.
             dy (ndarray/None): Standard error on the mean of the bin.
         """
-        if isinstance(resample, bool):
+        if type(resample) is bool:
+            x = vpnts.copy()
+            y = spnts.copy()
+            mask = np.logical_and(np.isfinite(y), y != 0.0)
             if not resample:
                 if not scatter:
-                    return vpnts, spnts
-                return vpnts, spnts, np.ones(vpnts.size) * np.nan
+                    return x[mask], y[mask]
+                return x[mask], y[mask], np.ones(x[mask].size) * np.nan
         if isinstance(resample, (int, bool)):
             bins = int(self.velax.size * int(resample) + 1)
             bins = np.linspace(self.velax[0], self.velax[-1], bins)
@@ -927,10 +930,12 @@ class annulus(object):
         vpnts, spnts = vpnts[idxs], spnts[idxs]
         y = binned_statistic(vpnts, spnts, statistic='mean', bins=bins)[0]
         x = np.average([bins[1:], bins[:-1]], axis=0)
+        mask = np.logical_and(np.isfinite(y), y != 0.0)
         if not scatter:
-            return x, y
+            return x[mask], y[mask]
         dy = binned_statistic(vpnts, spnts, statistic='std', bins=bins)[0]
-        return x, y, dy
+        mask = np.logical_and(dy > 0.0, mask)
+        return x[mask], y[mask], dy[mask]
 
     def _get_masked_spectrum(self, x, y):
         """Return the masked spectrum for fitting."""
@@ -1128,7 +1133,8 @@ class annulus(object):
     def plot_spectrum(self, vrot=0.0, vrad=0.0, resample=True, plot_fit=False,
                       ax=None, return_fig=False, plot_kwargs=None):
         """
-        Plot the aligned and stacked spectrum.
+        Plot the aligned and stacked spectrum. Can also include a fit to the
+        averaged spectrum, by default a Gaussian profile.
 
         Args:
             vrot (Optional[float]): Projected rotation velocity in [m/s].
@@ -1150,6 +1156,7 @@ class annulus(object):
         """
 
         # Get the deprojected spectrum and transform to mJy/beam.
+        # Remove all points which have a zero uncertainty if resampled.
 
         x, y, dy = self.deprojected_spectrum(vrot=vrot,
                                              vrad=vrad,
