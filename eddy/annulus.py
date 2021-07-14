@@ -605,7 +605,7 @@ class annulus(object):
         Args:
             p0 (Optional[list]): Starting positions for the optimization.
             fit_vrad (Optional[bool]): Whether to include the radial velocity
-                in the fit.
+                in the fit. Default is ``False``.
             centroid_method (Optional[str]): Method used to determine the line
                 centroids, and must be one of ``'quadratic'``, ``'max'`` or
                 ``'gaussian'``.

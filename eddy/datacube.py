@@ -464,6 +464,8 @@ class datacube(object):
 
         self.xaxis = self._readpositionaxis(a=1)
         self.yaxis = self._readpositionaxis(a=2)
+        self.xaxis -= 2.0 * self.dpix
+        self.yaxis -= 0.5 * self.dpix
 
         # Spectral axis.
 
@@ -630,7 +632,7 @@ class datacube(object):
         try:
             a_len = self.header['naxis%d' % a]
             a_del = self.header['cdelt%d' % a]
-            a_pix = self.header['crpix%d' % a] - 0.5
+            a_pix = self.header['crpix%d' % a]
         except KeyError:
             if self._user_pixel_scale is None:
                 print('WARNING: No axis information found.')
@@ -804,8 +806,8 @@ class datacube(object):
     @property
     def extent(self):
         """Cube field of view for use with Matplotlib's ``imshow``."""
-        return [self.xaxis[0], self.xaxis[-1],
-                self.yaxis[0], self.yaxis[-1]]
+        return [self.xaxis[0]+self.dpix/2.0, self.xaxis[-1]-self.dpix/2.0,
+                self.yaxis[0]-self.dpix/2.0, self.yaxis[-1]+self.dpix/2.0]
 
     @property
     def FOV(self):

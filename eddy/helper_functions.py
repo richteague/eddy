@@ -18,7 +18,7 @@ def fit_gaussian(x, y, dy=None, return_uncertainty=None):
     """Fit a gaussian to (x, y, [dy])."""
     if return_uncertainty is None:
         return_uncertainty = dy is not None
-    dy = dy * np.ones(x.size) if dy is None else dy
+    dy = np.ones(x.size) * (1.0 if dy is None else dy)
     if np.all(np.isnan(dy)):
         dy = np.ones(x.size)
         absolute_sigma = False
@@ -40,7 +40,7 @@ def fit_gaussian_thick(x, y, dy=None, return_uncertainty=None):
     """Fit an optically thick Gaussian function to (x, y, [dy])."""
     if return_uncertainty is None:
         return_uncertainty = dy is not None
-    dy = dy * np.ones(x.size) if dy is None else dy
+    dy = np.ones(x.size) * (1.0 if dy is None else dy)
     if np.all(np.isnan(dy)):
         dy = np.ones(x.size)
         absolute_sigma = False
@@ -67,7 +67,7 @@ def get_gaussian_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
     popt, cvar = fit_gaussian(x, y, dy, return_uncertainty=True)
     if np.isfinite(popt[0]):
         return (popt[0], cvar[0]) if return_uncertainty else popt[0]
-    return fill
+    return (fill, fill) if return_uncertainty else fill
 
 
 def get_gaussthick_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
@@ -77,7 +77,7 @@ def get_gaussthick_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
     popt, cvar = fit_gaussian_thick(x, y, dy, return_uncertainty=True)
     if np.isfinite(popt[0]):
         return (popt[0], cvar[0]) if return_uncertainty else popt[0]
-    return fill
+    return (fill, fill) if return_uncertainty else fill
 
 
 def get_gaussian_width(x, y, dy=None, return_uncertainty=None, fill=1e50):
@@ -87,7 +87,7 @@ def get_gaussian_width(x, y, dy=None, return_uncertainty=None, fill=1e50):
     popt, cvar = fit_gaussian(x, y, dy, return_uncertainty=True)
     if np.isfinite(popt[1]):
         return (popt[1], cvar[1]) if return_uncertainty else popt[1]
-    return fill
+    return (fill, fill) if return_uncertainty else fill
 
 
 def get_p0_gaussian(x, y):
