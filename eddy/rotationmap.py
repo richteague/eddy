@@ -41,7 +41,7 @@ class rotationmap(datacube):
     def __init__(self, path, FOV=None, uncertainty=None, downsample=None):
         datacube.__init__(self, path=path, FOV=FOV, fill=None)
         self.mask = np.isfinite(self.data)
-        self._readuncertainty(uncertainty=uncertainty, FOV=self.FOV)
+        self._readuncertainty(uncertainty=uncertainty, FOV=FOV)
         if downsample is not None:
             self.downsample_cube(downsample)
         self.vlsr = np.nanmedian(self.data)
@@ -1354,7 +1354,8 @@ class rotationmap(datacube):
     def _readuncertainty(self, uncertainty, FOV=None):
         """Reads the uncertainties."""
         if uncertainty is not None:
-            self.error = datacube(uncertainty, FOV=FOV, fill=None).data.copy()
+            self.error = datacube(uncertainty, FOV=FOV, fill=None)
+            self.error = self.error.data.copy()
         else:
             try:
                 uncertainty = '_'.join(self.path.split('_')[:-1])
@@ -1367,6 +1368,7 @@ class rotationmap(datacube):
                 print("Change this at any time with `rotationmap.error`.")
                 self.error = 0.1 * (self.data - np.nanmedian(self.data))
         self.error = np.where(np.isnan(self.error), 0.0, abs(self.error))
+        assert self.data.shape == self.error.shape
 
     # -- PLOTTING -- #
 

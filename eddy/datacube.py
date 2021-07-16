@@ -464,8 +464,8 @@ class datacube(object):
 
         self.xaxis = self._readpositionaxis(a=1)
         self.yaxis = self._readpositionaxis(a=2)
-        self.xaxis -= 2.0 * self.dpix
-        self.yaxis -= 0.5 * self.dpix
+        self.xaxis -= self.dpix
+        self.yaxis -= self.dpix
 
         # Spectral axis.
 
