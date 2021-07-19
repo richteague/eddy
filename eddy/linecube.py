@@ -140,7 +140,7 @@ class linecube(datacube):
 
         # Multiple iterations.
 
-        if beam_spacing == False:
+        if beam_spacing is False:
             raise ValueError("niter must equal 1 when beam_spacing=False.")
 
         samples = [self._velocity_profile(rbins=rbins,
@@ -221,9 +221,6 @@ class linecube(datacube):
         kw = {} if get_vlos_kwargs is None else get_vlos_kwargs
         kw['fit_vrad'] = kw.pop('fit_vrad', fit_vrad)
         kw['fit_method'] = fit_method
-        if fit_method.lower() == 'gp':
-            kw['plots'] = 'none'
-            kw['returns'] = 'percentiles'
 
         # Cycle through the annuli.
 
@@ -266,8 +263,8 @@ class linecube(datacube):
                 profiles += [output[0]]
                 uncertainties += [output[1]]
             elif fit_method.lower() == 'gp':
-                profiles += [output[:par, 1]]
-                uncertainties += [0.5 * (output[:par, 2] - output[:par, 0])]
+                profiles += [output[0]]
+                uncertainties += [output[1]]
 
         # Make sure the returned arrays are in the (nparam, nrad) form.
 
