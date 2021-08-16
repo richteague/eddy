@@ -40,6 +40,7 @@ class rotationmap(datacube):
 
     def __init__(self, path, FOV=None, uncertainty=None, downsample=None):
         datacube.__init__(self, path=path, FOV=FOV, fill=None)
+        self.data *= 1e3 if self.header['bunit'].lower() == 'km/s' else 1.0
         self.mask = np.isfinite(self.data)
         self._readuncertainty(uncertainty=uncertainty, FOV=FOV)
         if downsample is not None:
@@ -381,11 +382,17 @@ class rotationmap(datacube):
             # Fit the pixels, and correct the radial velocity to have positive
             # velocities describining motions away from the star.
 
-            popt, cvar = self._fit_SHO(x=x, y=y, dy=dy,
-                                       fit_vrot=fit_vrot,
-                                       fit_vrad=fit_vrad,
-                                       fix_vlsr=fix_vlsr,
-                                       optimize_kwargs=optimize_kwargs)
+            try:
+                popt, cvar = self._fit_SHO(x=x, y=y, dy=dy,
+                                           fit_vrot=fit_vrot,
+                                           fit_vrad=fit_vrad,
+                                           fix_vlsr=fix_vlsr,
+                                           optimize_kwargs=optimize_kwargs)
+            except ValueError:
+                popt = np.ones(nparams) * np.nan
+                fits += [popt]
+                uncertainty += [popt]
+                continue
 
             if fit_vrad and inc >= 0.0:
                 if fit_vrot:
@@ -531,7 +538,6 @@ class rotationmap(datacube):
 
         # Try the fitting. If it fails, just return NaNs.
 
-        #popt, cvar = curve_fit(func, x, y, **kw)
         try:
             popt, cvar = curve_fit(func, x, y, **kw)
             cvar = np.diag(cvar)**0.5

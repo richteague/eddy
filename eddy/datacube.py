@@ -232,6 +232,54 @@ class datacube(object):
             return r, t, z
         return r * np.cos(t), r * np.sin(t), z
 
+    def disk_to_sky(self, coords, inc, PA, x0=0.0, y0=0.0, frame='cartesian'):
+        """
+        Project disk-frame coordinates onto the sky plane.
+
+        Args:
+            coords (tuple): A tuple of the disk-frame coordinates to transform.
+                Must be either cartestian, cylindrical or spherical frames,
+                specified by the ``frame`` argument. If only two coordinates
+                are given, the input is assumed to be 2D. All spatial
+                coordinates should be given in [arcsec], while all angular
+                coordinates should be given in [radians].
+            inc (float): Inclination of the disk in [deg].
+            PA (float): Position angle of the disk, measured Eastwards to the
+                red-shifted major axis from North in [deg].
+            x0 (Optional[float]): Source right ascension offset in [arcsec].
+            y0 (Optional[float]): Source declination offset in [arcsec].
+            frame (Optional[str]): Coordinate frame of the disk coordinates,
+                either ``'cartesian'``, ``'cylindrical'`` or ``'spherical'``.
+
+        Returns:
+            Two arrays representing the projection of the input coordinates
+            onto the sky, ``x_sky`` and ``y_sky``.
+        """
+        try:
+            c1, c2, c3 = coords
+        except ValueError:
+            c1, c2 = coords
+            c3 = np.zeros(c1.size)
+        if frame.lower() == 'cartesian':
+            x, y, z = c1, c2, c3
+        elif frame.lower() == 'cylindrical':
+            x = c1 * np.cos(c2)
+            y = c1 * np.sin(c2)
+            z = c3
+        elif frame.lower() == 'spherical':
+            x = c1 * np.cos(c2) * np.sin(c3)
+            y = c1 * np.sin(c2) * np.sin(c3)
+            z = c1 * np.cos(c3)
+        else:
+            raise ValueError("frame_in must be 'cartestian'," +
+                             " 'cylindrical' or 'spherical'.")
+        inc = np.radians(inc)
+        PA = -np.radians(PA + 90.0)
+        y_roll = np.cos(inc) * y - np.sin(inc) * z
+        x_sky = np.cos(PA) * x - np.sin(PA) * y_roll
+        y_sky = np.sin(PA) * x + np.cos(PA) * y_roll
+        return x_sky, y_sky
+
     @staticmethod
     def _rotate_coords(x, y, PA):
         """Rotate (x, y) by PA [deg]."""
