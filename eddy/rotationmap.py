@@ -728,6 +728,9 @@ class rotationmap(datacube):
         self.set_prior('vp_qtaper', [0.0, 5.0], 'flat')
         self.set_prior('vr_100', [-1e3, 1e3], 'flat')
         self.set_prior('vr_q', [-2.0, 2.0], 'flat')
+        self.set_prior('r_pressure', [0.0, 1e4], 'flat')
+        self.set_prior('m_pressure', [-1.0, 0.0], 'flat')
+        self.set_prior('n_pressure', [0.0, 20.0], 'flat')
 
     def _ln_prior(self, params):
         """Log-priors."""
@@ -828,21 +831,32 @@ class rotationmap(datacube):
 
         # Rotation profile.
 
+        has_pressure = False if params.get('r_pressure') is None else True
         has_vp_100 = False if params.get('vp_100') is None else True
         has_mstar = False if params.get('mstar') is None else True
+
         if has_mstar and has_vp_100:
             raise KeyError("Only provide either `'mstar'` or `'vp_100'`.")
         if not has_mstar and not has_vp_100:
             raise KeyError("Must provide either `'mstar'` or `'vp_100'`.")
         if has_mstar:
-            params['vfunc'] = self._proj_vkep
+            if has_pressure:
+                params['vfunc'] = self._proj_vkep_pressure
+            else:
+                params['vfunc'] = self._proj_vkep
         else:
-            params['vfunc'] = self._proj_vpow
+            if has_pressure:
+                params['v_func'] = self.proj_vpow_pressure
+            else:
+                params['vfunc'] = self._proj_vpow
+
         params['vp_q'] = params.pop('vp_q', -0.5)
         params['vp_rtaper'] = params.pop('vp_rtaper', 1e10)
         params['vp_qtaper'] = params.pop('vp_qtaper', 1.0)
         params['vr_100'] = params.pop('vr_100', 0.0)
         params['vr_q'] = params.pop('vr_q', 0.0)
+        params['m_pressure'] = params.pop('m_pressure', 0.0)
+        params['n_pressure'] = params.pop('n_pressure', 10.0)
 
         # Flared emission surface.
 
@@ -1073,17 +1087,43 @@ class rotationmap(datacube):
         return v0 + params['vlsr']
 
     def _proj_vkep(self, rvals, tvals, zvals, params):
-        """Projected Keplerian rotational velocity profile."""
+        """Projected Keplerian rotation velocity."""
         rvals *= sc.au * params['dist']
         zvals *= sc.au * params['dist']
         v_phi = sc.G * params['mstar'] * self.msun * np.power(rvals, 2)
         v_phi = np.sqrt(v_phi * np.power(np.hypot(rvals, zvals), -3))
         return self._proj_vphi(v_phi, tvals, params)
 
+    def _proj_vkep_pressure(self, rvals, tvals, zvals, params):
+        """Projected Keplerian rotation velocity with pressure term."""
+        v1 = sc.G * params['mstar'] * self.msun
+        v1 *= np.power(rvals * sc.au * params['dist'], 2)
+        v1 *= np.power(np.hypot(rvals, zvals) * sc.au * params['dist'], -3)
+        v1 **= 0.5
+        F0 = abs(rvals - params['r_pressure']).argmin()
+        F0 = v1[np.unravel_index(F0, rvals.shape)]
+        v2 = (rvals - params['r_pressure']) * params['m_pressure']
+        v2 = F0 * np.power(params['n_pressure'], v2)
+        v_phi = np.where(rvals <= params['r_pressure'], v1, v2)
+        return self._proj_vphi(v_phi, tvals, params)
+
     def _proj_vpow(self, rvals, tvals, zvals, params):
         """Projected power-law rotational velocity profile."""
         v_phi = (rvals * params['dist'] / 100.)**params['vp_q']
         v_phi *= np.exp(-(rvals / params['vp_rtaper'])**params['vp_qtaper'])
+        v_phi = self._proj_vphi(params['vp_100'] * v_phi, tvals, params)
+        v_rad = (rvals * params['dist'] / 100.)**params['vr_q']
+        v_rad = self._proj_vrad(params['vr_100'] * v_rad, tvals, params)
+        return v_phi + v_rad
+
+    def _proj_vpow_pressure(self, rvals, tvals, zvals, params):
+        """Projected power-law velocity profile with pressure term."""
+        v1 = (rvals * params['dist'] / 100.)**params['vp_q']
+        v1 *= np.exp(-(rvals / params['vp_rtaper'])**params['vp_qtaper'])
+        F0 = (params['r_pressure'] * params['dist'] / 100.0)**params['vp_q']
+        v2 = (rvals - params['r_pressure']) * params['m_pressure']
+        v2 = F0 * np.power(params['n_pressure'], v2)
+        v_phi = np.where(rvals <= params['r_pressure'], v1, v2)
         v_phi = self._proj_vphi(params['vp_100'] * v_phi, tvals, params)
         v_rad = (rvals * params['dist'] / 100.)**params['vr_q']
         v_rad = self._proj_vrad(params['vr_100'] * v_rad, tvals, params)
