@@ -728,9 +728,8 @@ class rotationmap(datacube):
         self.set_prior('vp_qtaper', [0.0, 5.0], 'flat')
         self.set_prior('vr_100', [-1e3, 1e3], 'flat')
         self.set_prior('vr_q', [-2.0, 2.0], 'flat')
-        self.set_prior('r_pressure', [0.0, 1e4], 'flat')
-        self.set_prior('m_pressure', [-1.0, 0.0], 'flat')
-        self.set_prior('n_pressure', [0.0, 20.0], 'flat')
+        self.set_prior('r_pressure', [0.0, 3.0*self.xaxis.max()], 'flat')
+        self.set_prior('w_pressure', [0.0, 1e2], 'flat')
 
     def _ln_prior(self, params):
         """Log-priors."""
@@ -831,32 +830,42 @@ class rotationmap(datacube):
 
         # Rotation profile.
 
-        has_pressure = False if params.get('r_pressure') is None else True
-        has_vp_100 = False if params.get('vp_100') is None else True
-        has_mstar = False if params.get('mstar') is None else True
-
-        if has_mstar and has_vp_100:
-            raise KeyError("Only provide either `'mstar'` or `'vp_100'`.")
-        if not has_mstar and not has_vp_100:
-            raise KeyError("Must provide either `'mstar'` or `'vp_100'`.")
-        if has_mstar:
-            if has_pressure:
-                params['vfunc'] = self._proj_vkep_pressure
-            else:
-                params['vfunc'] = self._proj_vkep
+        if params.get('r_pressure') is None:
+            params['has_pressure'] = False
         else:
-            if has_pressure:
-                params['v_func'] = self.proj_vpow_pressure
+            params['has_pressure'] = True
+
+        if params.get('vp_100') is None:
+            params['has_vp_100'] = False
+        else:
+            params['has_vp_100'] = True
+
+        if params.get('mstar') is None:
+            params['has_mstar'] = False
+        else:
+            params['has_mstar'] = True
+
+        if params['has_mstar'] and params['has_vp_100']:
+            raise KeyError("Only provide either `'mstar'` or `'vp_100'`.")
+        if not params['has_mstar'] and not params['has_vp_100']:
+            raise KeyError("Must provide either `'mstar'` or `'vp_100'`.")
+        if params['has_mstar']:
+            if params['has_pressure']:
+                params['vfunc'] = self._vkep_pressure
             else:
-                params['vfunc'] = self._proj_vpow
+                params['vfunc'] = self._vkep
+        else:
+            if params['has_pressure']:
+                params['vfunc'] = self._vpow_pressure
+            else:
+                params['vfunc'] = self._vpow
 
         params['vp_q'] = params.pop('vp_q', -0.5)
         params['vp_rtaper'] = params.pop('vp_rtaper', 1e10)
         params['vp_qtaper'] = params.pop('vp_qtaper', 1.0)
         params['vr_100'] = params.pop('vr_100', 0.0)
         params['vr_q'] = params.pop('vr_q', 0.0)
-        params['m_pressure'] = params.pop('m_pressure', 0.0)
-        params['n_pressure'] = params.pop('n_pressure', 10.0)
+        params['w_pressure'] = params.pop('w_pressure', 0.0)
 
         # Flared emission surface.
 
@@ -902,7 +911,8 @@ class rotationmap(datacube):
         return params
 
     def evaluate_models(self, samples=None, params=None, draws=0.5,
-                        collapse_func=np.mean, coords_only=False):
+                        collapse_func=np.mean, coords_only=False,
+                        profile_only=False):
         """
         Evaluate models based on the samples provided and the parameter
         dictionary. If ``draws`` is an integer, it represents the number of
@@ -923,6 +933,8 @@ class rotationmap(datacube):
                 argument (as with most Numpy functions).
             coords_only (Optional[bool]): Return the deprojected coordinates
                 rather than the v0 model. Default is False.
+            profile_only (Optional[bool]): Return the radial profiles of the
+                velocity profiles rather than the v0 model. Default is False.
 
         Returns:
             model (ndarray): The sampled model, either the v0 model, or, if
@@ -942,7 +954,10 @@ class rotationmap(datacube):
             if coords_only:
                 return self.disk_coords(**verified_params)
             else:
-                return self._make_model(verified_params)
+                if profile_only:
+                    return self._make_profile(verified_params)
+                else:
+                    return self._make_model(verified_params)
 
         nparam = np.sum([type(params[k]) is int for k in params.keys()])
         if samples.shape[1] != nparam:
@@ -960,6 +975,8 @@ class rotationmap(datacube):
                 tmp = self._populate_dictionary(samples[idx], verified_params)
                 if coords_only:
                     models += [self.disk_coords(**tmp)]
+                elif profile_only:
+                    models += [self._make_profile(tmp)]
                 else:
                     models += [self._make_model(tmp)]
             return collapse_func(models, axis=0)
@@ -971,6 +988,8 @@ class rotationmap(datacube):
             tmp = self._populate_dictionary(tmp, verified_params)
             if coords_only:
                 return self.disk_coords(**tmp)
+            elif profile_only:
+                return self._make_profile(tmp)
             else:
                 return self._make_model(tmp)
 
@@ -1080,54 +1099,45 @@ class rotationmap(datacube):
 
     # -- VELOCITY PROJECTION -- #
 
-    def _v0(self, params):
-        """Projected velocity structre."""
-        rvals, tvals, zvals = self.disk_coords(**params)
-        v0 = params['vfunc'](rvals, tvals, zvals, params)
-        return v0 + params['vlsr']
+    def _vkep(self, rvals, tvals, zvals, params):
+        """Keplerian rotation velocity."""
+        r_m = rvals * sc.au * params['dist']
+        z_m = zvals * sc.au * params['dist']
+        vkep = sc.G * params['mstar'] * self.msun * np.power(r_m, 2)
+        return np.sqrt(vkep * np.power(np.hypot(r_m, z_m), -3))
 
-    def _proj_vkep(self, rvals, tvals, zvals, params):
-        """Projected Keplerian rotation velocity."""
-        rvals *= sc.au * params['dist']
-        zvals *= sc.au * params['dist']
-        v_phi = sc.G * params['mstar'] * self.msun * np.power(rvals, 2)
-        v_phi = np.sqrt(v_phi * np.power(np.hypot(rvals, zvals), -3))
-        return self._proj_vphi(v_phi, tvals, params)
+    def _vkep_pressure(self, rvals, tvals, zvals, params):
+        """Keplerian rotation velocity with pressure term."""
+        vkep = self._vkep(rvals, tvals, zvals, params)
+        r_p = params['r_pressure']
+        idx = np.unravel_index(abs(rvals - r_p).argmin(), rvals.shape)
+        dvprs = (1.0 - 1.5 * r_p**2 / (r_p**2 + zvals[idx]**2))
+        dvprs = ((rvals - r_p) / r_p) * dvprs + 1.0
+        vkep = np.where(rvals <= r_p, vkep, vkep[idx] * dvprs)
+        vkep = np.clip(vkep, a_min=0.0, a_max=None)
+        if params['w_pressure'] > 0.0:
+            taper = (rvals - r_p) / params['w_pressure']
+            taper = np.exp(-np.power(taper, 2.0))
+            vkep *= np.where(rvals <= r_p, 1.0, taper)
+        return vkep
 
-    def _proj_vkep_pressure(self, rvals, tvals, zvals, params):
-        """Projected Keplerian rotation velocity with pressure term."""
-        v1 = sc.G * params['mstar'] * self.msun
-        v1 *= np.power(rvals * sc.au * params['dist'], 2)
-        v1 *= np.power(np.hypot(rvals, zvals) * sc.au * params['dist'], -3)
-        v1 **= 0.5
-        F0 = abs(rvals - params['r_pressure']).argmin()
-        F0 = v1[np.unravel_index(F0, rvals.shape)]
-        v2 = (rvals - params['r_pressure']) * params['m_pressure']
-        v2 = F0 * np.power(params['n_pressure'], v2)
-        v_phi = np.where(rvals <= params['r_pressure'], v1, v2)
-        return self._proj_vphi(v_phi, tvals, params)
+    def _vpow(self, rvals, tvals, zvals, params):
+        """Power-law rotation velocity profile."""
+        vpow = (rvals * params['dist'] / 100.)**params['vp_q']
+        return params['vp_100'] * vpow
 
-    def _proj_vpow(self, rvals, tvals, zvals, params):
-        """Projected power-law rotational velocity profile."""
-        v_phi = (rvals * params['dist'] / 100.)**params['vp_q']
-        v_phi *= np.exp(-(rvals / params['vp_rtaper'])**params['vp_qtaper'])
-        v_phi = self._proj_vphi(params['vp_100'] * v_phi, tvals, params)
-        v_rad = (rvals * params['dist'] / 100.)**params['vr_q']
-        v_rad = self._proj_vrad(params['vr_100'] * v_rad, tvals, params)
-        return v_phi + v_rad
-
-    def _proj_vpow_pressure(self, rvals, tvals, zvals, params):
-        """Projected power-law velocity profile with pressure term."""
-        v1 = (rvals * params['dist'] / 100.)**params['vp_q']
-        v1 *= np.exp(-(rvals / params['vp_rtaper'])**params['vp_qtaper'])
-        F0 = (params['r_pressure'] * params['dist'] / 100.0)**params['vp_q']
-        v2 = (rvals - params['r_pressure']) * params['m_pressure']
-        v2 = F0 * np.power(params['n_pressure'], v2)
-        v_phi = np.where(rvals <= params['r_pressure'], v1, v2)
-        v_phi = self._proj_vphi(params['vp_100'] * v_phi, tvals, params)
-        v_rad = (rvals * params['dist'] / 100.)**params['vr_q']
-        v_rad = self._proj_vrad(params['vr_100'] * v_rad, tvals, params)
-        return v_phi + v_rad
+    def _vpow_pressure(self, rvals, tvals, zvals, params):
+        """Power-law rotation with pressure term."""
+        vpow = self._vpow(rvals, tvals, zvals, params)
+        r_p = params['r_pressure']
+        idx = np.unravel_index(abs(rvals - r_p).argmin(), rvals.shape)
+        dvprs = ((rvals - r_p) / r_p) * params['vp_q'] + 1.0
+        vpow = np.where(rvals <= r_p, vpow, vpow[idx] * dvprs)
+        if params['w_pressure'] > 0.0:
+            taper = (rvals - r_p) / params['w_pressure']
+            taper = np.exp(-np.power(taper, 2.0))
+            vpow *= np.where(rvals <= r_p, 1.0, taper)
+        return vpow
 
     def _proj_vphi(self, v_phi, tvals, params):
         """Project the rotational velocity onto the sky."""
@@ -1137,12 +1147,27 @@ class rotationmap(datacube):
         """Project the radial velocity onto the sky."""
         return v_rad * np.sin(tvals) * np.sin(-np.radians(params['inc']))
 
+    def _proj_valt(self, v_alt, tvals, params):
+        """Project the vertical velocity onto the sky."""
+        return -v_alt * np.cos(np.radians(params['inc']))
+
     def _make_model(self, params):
         """Build the velocity model from the dictionary of parameters."""
-        v0 = self._v0(params)
+        rvals, tvals, zvals = self.disk_coords(**params)
+        vphi = params['vfunc'](rvals, tvals, zvals, params)
+        v0 = self._proj_vphi(vphi, tvals, params) + params['vlsr']
         if params['beam']:
             v0 = datacube._convolve_image(v0, self._beamkernel())
         return v0
+
+    def _make_profile(self, params):
+        """Build the velocity profile from the dictionary of parameters."""
+        rvals, _, zvals = self.disk_coords(**params)
+        rvals, zvals = rvals.flatten(), zvals.flatten()
+        idx = np.argsort(rvals)
+        rvals, zvals = rvals[idx], zvals[idx]
+        tvals = np.zeros(rvals.size)
+        return rvals, params['vfunc'](rvals, tvals, zvals, params)
 
     def deproject_model_residuals(self, samples, params):
         """
