@@ -1,7 +1,7 @@
 # eddy - Extracting Disk DYnamics
 
 [![status](http://joss.theoj.org/papers/2868c5ad4b6405eba1aaf1cd8ea53274/status.svg)](http://joss.theoj.org/papers/2868c5ad4b6405eba1aaf1cd8ea53274)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.1440052.svg)](https://doi.org/10.5281/zenodo.1440052)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.1440051.svg)](https://doi.org/10.5281/zenodo.1440051)
 <a href="http://ascl.net/1901.010"><img src="https://img.shields.io/badge/ascl-1901.010-blue.svg?colorB=262255" alt="ascl:1901.010" /></a>
 [![Documentation Status](https://readthedocs.org/projects/eddy/badge/?version=latest)](https://eddy.readthedocs.io/en/latest/?badge=latest)
 
