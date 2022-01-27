@@ -93,9 +93,18 @@ class annulus(object):
         # Define an empty grid to interpolate the data for plotting.
         # TODO: Check if there's a reasonable way for the user to change this.
 
-        self.theta_grid = np.linspace(-np.pi, np.pi, 100)
-        self.velax_grid = np.linspace(self.velax.min(), self.velax.max(), 100)
-        self.spectra_grid = None
+        self.theta_grid = np.linspace(-np.pi, np.pi, 60)
+        self.velax_grid = self.velax.copy()
+
+    @property
+    def extent_grid(self, degrees=True):
+        if degrees:
+            return [self.velax_grid[0], self.velax_grid[-1],
+                    np.degrees(self.theta_grid[0]),
+                    np.degrees(self.theta_grid[-1])]
+        else:
+            return [self.velax_grid[0], self.velax_grid[-1],
+                    self.theta_grid[0], self.theta_grid[-1]]
 
     # -- Measure the Velocity -- #
 
@@ -783,11 +792,66 @@ class annulus(object):
         _vrad *= -1.0 if self.rotation == 'clockwise' else 1.0
         return _vrot + _vrad
 
-    def _deprojected_spectra(self, vrot, vrad=0.0):
-        """Returns all deprojected points as an ensemble."""
+    def deprojected_spectra(self, vrot, vrad=0.0, kind='linear', weights=None):
+        """
+        Returns all deprojected points as an ensemble.
+
+        Args:
+            vrot (float): Projected rotation velocity in [m/s].
+            vrad (optional[float]): Projected radial velocity in [m/s].
+            kind (optional[str]): Interpolation kind to use.
+            weights (optional): The weights used to smooth the data prior to
+                shifting. If a ``float`` or ``int`` is provided, will interpret=
+                this as a top-hat function with that width.
+
+        Returns:
+            A (M, N) shaped array of M spectra over N velocity points.
+        """
+
         vlos = self.calc_vlos(vrot=vrot, vrad=vrad)
-        return np.array([np.interp(self.velax, self.velax - dv, spectra)
-                         for dv, spectra in zip(vlos, self.spectra)])
+        spectra = self.spectra.copy()
+
+        if weights is not None:
+            from scipy.ndimage import convolve1d
+            if isinstance(weights, (float, int)):
+                weights = np.ones(int(weights)) / float(weights)
+            spectra_a = convolve1d(spectra, weights, axis=1)
+            spectra_b = convolve1d(spectra[:, ::-1], weights, axis=1)[:, ::-1]
+            spectra = np.nanmean([spectra_a, spectra_b], axis=0)
+
+        from scipy.interpolate import interp1d
+
+        s = []
+        for dv, spectrum in zip(vlos, spectra):
+            mask = np.isfinite(spectrum)
+            s += [interp1d(self.velax[mask] - dv, spectrum[mask],
+                           kind=kind, bounds_error=False)(self.velax)]
+        return np.array(s)
+
+    def get_river(self, vrot=0.0, vrad=0.0, kind='linear', weights=None,
+                  method='nearest'):
+        """
+        Returns the deprojected spectra, but interpolated onto a reguar grid
+        defined by ``annulus.theta_grid`` in [rad] and ``annulus.velax_grid``
+        in [m/s].
+
+        Args:
+            vrot (float): Rotational velocity in [m/s].
+            vrad (optional[float]): Radial velocity in [m/s].
+            kind (optional[str]): Interpolation kind to use when shifting
+                spectra.
+            weights (optional): The weights used to smooth the data prior to
+                shifting. If a ``float`` or ``int`` is provided, will interpret
+                this as a top-hat function with that width.
+            method (optional[str]): Interpolation method to use when gridding
+                data.
+
+        Returns:
+            [TBD] - self.theta_grid, self.velax_grid, river
+        """
+        river = self.deprojected_spectra(vrot, vrad, kind, weights)
+        river = self._grid_river(river, method)
+        return self.theta_grid, self.velax_grid, river
 
     def deprojected_spectrum(self, vrot, vrad=0.0, resample=True,
                              scatter=True):
@@ -857,10 +921,10 @@ class annulus(object):
                 from bettermoments.quadratic import quadratic
             except ImportError:
                 raise ImportError("Please install 'bettermoments'.")
-            vmax = np.array([quadratic(s, uncertainty=self.rms,
-                                       x0=self.velax[0], dx=self.chan)
-                             for s in self.spectra]).T
-            vmax, dvmax = vmax[0], vmax[1]
+            vmax = [quadratic(s, uncertainty=self.rms,
+                              x0=self.velax[0], dx=self.chan)
+                    for s in self.spectra]
+            vmax, dvmax = np.array(vmax).T[:2]
         elif method == 'gaussian':
             from .helper_functions import get_gaussian_center
             vmax = [get_gaussian_center(self.velax, s, self.rms)
@@ -871,8 +935,13 @@ class annulus(object):
             vmax = [get_gaussthick_center(self.velax, s, self.rms)
                     for s in self.spectra]
             vmax, dvmax = np.array(vmax).T
+        elif method == 'doublegauss':
+            from .helper_functions import get_doublegauss_center
+            vmax = [get_doublegauss_center(self.velax, s, self.rms)
+                    for s in self.spectra]
+            vmax, dvmax = np.array(vmax).T
         else:
-            raise ValueError("method is not 'max', 'gaussian' or 'quadratic'.")
+            raise ValueError(f"Unknown method, {method}.")
         return vmax, dvmax
 
     def _order_spectra(self, vpnts, spnts=None):
@@ -980,7 +1049,7 @@ class annulus(object):
 
     # -- River Functions -- #
 
-    def _interpolate_river(self, spnts):
+    def _grid_river(self, spnts, method='nearest'):
         """Grid the data to plot as a river."""
         from scipy.interpolate import griddata
         spnts = np.vstack([spnts[-1:], spnts, spnts[:1]])
@@ -991,12 +1060,12 @@ class annulus(object):
         tpnts = tpnts[:, None] * np.ones(spnts.shape)
         sgrid = griddata((vpnts.flatten(), tpnts.flatten()), spnts.flatten(),
                          (self.velax_grid[None, :], self.theta_grid[:, None]),
-                         method='nearest')
+                         method=method)
         sgrid = np.where(self.theta_grid[:, None] > tpnts.max(), np.nan, sgrid)
         sgrid = np.where(self.theta_grid[:, None] < tpnts.min(), np.nan, sgrid)
         return sgrid
 
-    def plot_river(self, vrot=None, vrad=0.0, residual=False,
+    def plot_river(self, vrot=None, vrad=0.0, residual=False, method='nearest',
                    plot_kwargs=None, profile_kwargs=None, return_fig=False):
         """
         Make a river plot, showing how the spectra change around the azimuth.
@@ -1014,6 +1083,7 @@ class annulus(object):
                 if a ``float``. Note that this is not the same resampling
                 method as used for the spectra and should only be used for
                 qualitative analysis.
+            method (Optional[str]): Interpolation method for ``griddata``.
             xlims (Optional[list]): Minimum and maximum x-range for the figure.
             ylims (Optional[list]): Minimum and maximum y-range for the figure.
             tgrid (Optional[ndarray]): Theta grid in [rad] used for gridding
@@ -1034,8 +1104,8 @@ class annulus(object):
         if vrot is None:
             spectra = self.spectra
         else:
-            spectra = self._deprojected_spectra(vrot=vrot, vrad=vrad)
-        spectra = self._interpolate_river(spectra)
+            spectra = self.deprojected_spectra(vrot=vrot, vrad=vrad)
+        spectra = self._grid_river(spectra, method=method)
 
         # Get the residual if necessary.
 
@@ -1240,6 +1310,7 @@ class annulus(object):
             return_fig = False
 
         v0, dv0 = self.line_centroids(method=centroid_method)
+        dv0 = v0.copy() * 0.025
 
         plot_kwargs = {} if plot_kwargs is None else plot_kwargs
         plot_kwargs['fmt'] = plot_kwargs.pop('fmt', 'o')

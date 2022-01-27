@@ -279,6 +279,10 @@ class rotationmap(datacube):
         velocity, defined such that positive values are away from the star,
         along the line of sight.
 
+        .. note::
+            If you find negative :math:`v_{\phi}` values then your chosen
+            position angle is likely off by 180 degrees.
+
         Args:
             rpnts
             rbins
@@ -447,7 +451,23 @@ class rotationmap(datacube):
 
     def _evaluate_annuli_model(self, rpnts, fits, rvals, pvals, fit_vrot=True,
                                fit_vrad=True, fix_vlsr=False):
-        """Evaluate the annuli models. Fits must not be deprojected."""
+        """
+        Evaluate the annuli models onto a 2D map. Fits must not be deprojected.
+
+        Args:
+            rpnts (array): A size M array of radial positions.
+            fits (array): A [NxM] array containing the inferred velocity
+                values where N is the number of velocity components (1, 2, 3).
+            rvals (array): A 2D array of on-sky radial positions in [arcsec].
+            pvals (array): A 2D array of on-sky polar angle in [radians].
+            fit_vrot (Optional[bool]): If v_rot is included in ``fits``.
+            fit_vrad (Optional[bool]): If v_rad is included in ``fits``.
+            fix_vlsr (Optional[bool/float]): If ``False``, v_z is included in
+                ``fits``, otherwise this specifies the fized ``vlsr``.
+
+        Returns:
+            v0
+        """
         from scipy.interpolate import interp1d
         idx = 0
         if fit_vrot:
@@ -712,7 +732,7 @@ class rotationmap(datacube):
         self.set_prior('psi', [0.0, 5.0], 'flat')
         self.set_prior('r_cavity', [0.0, 1e30], 'flat')
         self.set_prior('r_taper', [0.0, 1e30], 'flat')
-        self.set_prior('q_taper', [0.0, 5.0], 'flat')
+        self.set_prior('q_taper', [0.0, 15.0], 'flat')
 
         # Warp
 
@@ -970,16 +990,20 @@ class rotationmap(datacube):
         # Avearge over a random draw of models.
 
         if isinstance(int(draws) if draws > 1.0 else draws, int):
-            models = []
+            rvals, models = [], []
             for idx in np.random.randint(0, samples.shape[0], draws):
                 tmp = self._populate_dictionary(samples[idx], verified_params)
                 if coords_only:
                     models += [self.disk_coords(**tmp)]
                 elif profile_only:
-                    models += [self._make_profile(tmp)]
+                    _rval, _model = self._make_profile(tmp)
+                    rvals += [_rval]
+                    models += [_model]
                 else:
                     models += [self._make_model(tmp)]
-            return collapse_func(models, axis=0)
+            rvals = collapse_func(rvals, axis=0)
+            models = collapse_func(models, axis=0)
+            return (rvals, models) if profile_only else models
 
         # Take a percentile of the samples.
 

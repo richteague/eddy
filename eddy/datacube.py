@@ -188,43 +188,48 @@ class datacube(object):
         flared = r_taper is not None or w_i is not None or r_cavity is not None
 
         # Select the quickest pixel deprojection method.
+        # First round is analytical forms where `z_func` is not specified.
 
-        if z0 is None or z0 == 0.0 and z_func is None:
+        if z_func is None:
+            if z0 is None or z0 == 0.0:
+                r, t = self._get_midplane_polar_coords(x0, y0, inc, PA)
+                z = np.zeros(r.shape)
+            elif z0 > 0.0 and psi == 1.0 and not flared:
+                r, t, z = self._get_conical_polar_coords(x0, y0, inc, PA, z0)
 
-            r, t = self._get_midplane_polar_coords(x0, y0, inc, PA)
-            z = np.zeros(r.shape)
+        # Here `z_func` can still be not provided, but must be defined based
+        # on the parameters provided (i.e., psi != 1.0).
 
-        elif z0 > 0.0 and psi == 1.0 and not flared and z_func is None:
+        r_cavity = 0.0 if r_cavity is None else r_cavity
+        r_taper = np.inf if r_taper is None else r_taper
+        q_taper = 1.0 if q_taper is None else q_taper
+        w_i = 0.0 if w_i is None else w_i
+        w_r = 1.0 if w_r is None else w_r
+        w_t = 0.0 if w_t is None else w_t
 
-            r, t, z = self._get_conical_polar_coords(x0, y0, inc, PA, z0)
+        # Define the emission surface and warp functions.
 
-        else:
-
-            r_cavity = 0.0 if r_cavity is None else r_cavity
-            r_taper = np.inf if r_taper is None else r_taper
-            q_taper = 1.0 if q_taper is None else q_taper
-            w_i = 0.0 if w_i is None else w_i
-            w_r = 1.0 if w_r is None else w_r
-            w_t = 0.0 if w_t is None else w_t
-
-            if z_func is None:
-                def z_func(r_in):
-                    r = np.clip(r_in - r_cavity, a_min=0.0, a_max=None)
-                    z = r**psi * np.exp(-np.power(r / r_taper, q_taper))
-                    return np.clip(z0 * z, a_min=0.0, a_max=None)
-
-            def w_func(r_in, t):
+        if z_func is None:
+            def z_func(r_in):
                 r = np.clip(r_in - r_cavity, a_min=0.0, a_max=None)
-                warp = np.radians(w_i) * np.exp(-0.5 * (r / w_r)**2)
-                return r * np.tan(warp * np.sin(t - np.radians(w_t)))
+                z = r**psi * np.exp(-np.power(r / r_taper, q_taper))
+                return np.clip(z0 * z, a_min=0.0, a_max=None)
 
-            if shadowed:
-                coords = self._get_shadowed_coords(x0, y0, inc, PA,
-                                                   z_func, w_func)
-            else:
-                coords = self._get_flared_coords(x0, y0, inc, PA,
-                                                 z_func, w_func)
-            r, t, z = coords
+        def w_func(r_in, t):
+            r = np.clip(r_in - r_cavity, a_min=0.0, a_max=None)
+            warp = np.radians(w_i) * np.exp(-0.5 * (r / w_r)**2)
+            return r * np.tan(warp * np.sin(t - np.radians(w_t)))
+
+        # Select the deprojection method. `shadowed` uses the slower (but more
+        # robust) forward modelling approach, rather than an iterative method.
+
+        if shadowed:
+            coords = self._get_shadowed_coords(x0, y0, inc, PA,
+                                               z_func, w_func)
+        else:
+            coords = self._get_flared_coords(x0, y0, inc, PA,
+                                             z_func, w_func)
+        r, t, z = coords
 
         # Return the values.
 
@@ -334,14 +339,15 @@ class datacube(object):
         x_mid, y_mid = self._get_midplane_cart_coords(x0, y0, inc, PA)
         r_tmp, t_tmp = np.hypot(x_mid, y_mid), np.arctan2(y_mid, x_mid)
         for _ in range(self.flared_niter):
-            z_tmp = z_func(r_tmp) + w_func(r_tmp, t_tmp)
-            y_tmp = y_mid + z_tmp * np.tan(np.radians(inc))
+            y_tmp = y_mid + z_func(r_tmp) * np.tan(np.radians(inc))
             r_tmp = np.hypot(y_tmp, x_mid)
             t_tmp = np.arctan2(y_tmp, x_mid)
         return r_tmp, t_tmp, z_func(r_tmp)
 
     def _get_shadowed_coords(self, x0, y0, inc, PA, z_func, w_func):
-        """Return cyclindrical coords of surface in [arcsec, rad, arcsec]."""
+        """
+        Return cyclindrical coords of surface in [arcsec, rad, arcsec].
+        """
 
         # Make the disk-frame coordinates.
 
@@ -363,7 +369,7 @@ class datacube(object):
         else:
             y_dep = np.minimum.accumulate(y_dep[::-1], axis=0)[::-1]
 
-        # Rotate and the disk.
+        # Rotate and recenter the disk.
 
         x_rot, y_rot = self._rotate_coords(x_dep, y_dep, PA)
         x_rot, y_rot = x_rot + x0, y_rot + y0
@@ -512,8 +518,8 @@ class datacube(object):
 
         self.xaxis = self._readpositionaxis(a=1)
         self.yaxis = self._readpositionaxis(a=2)
-        self.xaxis -= self.dpix
-        self.yaxis -= self.dpix
+        self.xaxis -= 0.5*self.dpix
+        self.yaxis -= 0.5*self.dpix
 
         # Spectral axis.
 

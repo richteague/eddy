@@ -14,8 +14,8 @@ def random_p0(p0, scatter, nwalkers):
     return np.where(p0[None, :] == 0.0, dp0 - 1.0, dp0)
 
 
-def fit_gaussian(x, y, dy=None, return_uncertainty=None):
-    """Fit a gaussian to (x, y, [dy])."""
+def _errors(x, dy, return_uncertainty):
+    """Parse the inputs related to errors."""
     if return_uncertainty is None:
         return_uncertainty = dy is not None
     dy = np.ones(x.size) * (1.0 if dy is None else dy)
@@ -24,6 +24,12 @@ def fit_gaussian(x, y, dy=None, return_uncertainty=None):
         absolute_sigma = False
     else:
         absolute_sigma = True
+    return dy, return_uncertainty, absolute_sigma
+
+
+def fit_gaussian(x, y, dy=None, return_uncertainty=None):
+    """Fit a gaussian to (x, y[, dy])."""
+    dy, return_uncertainty, absolute_sigma = _errors(x, dy, return_uncertainty)
     p0 = get_p0_gaussian(x, y)
     try:
         popt, cvar = curve_fit(gaussian, x, y, sigma=dy, p0=p0,
@@ -37,15 +43,8 @@ def fit_gaussian(x, y, dy=None, return_uncertainty=None):
 
 
 def fit_gaussian_thick(x, y, dy=None, return_uncertainty=None):
-    """Fit an optically thick Gaussian function to (x, y, [dy])."""
-    if return_uncertainty is None:
-        return_uncertainty = dy is not None
-    dy = np.ones(x.size) * (1.0 if dy is None else dy)
-    if np.all(np.isnan(dy)):
-        dy = np.ones(x.size)
-        absolute_sigma = False
-    else:
-        absolute_sigma = True
+    """Fit an optically thick Gaussian function to (x, y[, dy])."""
+    dy, return_uncertainty, absolute_sigma = _errors(x, dy, return_uncertainty)
     p0 = fit_gaussian(x=x, y=y, dy=dy,
                       return_uncertainty=False)
     p0 = np.append(p0, 0.5)
@@ -57,6 +56,53 @@ def fit_gaussian_thick(x, y, dy=None, return_uncertainty=None):
     except Exception:
         popt = [np.nan, np.nan, np.nan, np.nan]
         cvar = popt.copy()
+    return (popt, cvar) if return_uncertainty else popt
+
+
+def fit_double_gaussian(x, y, dy=None, return_uncertainty=None):
+    """
+    Fit two Gaussian lines to (x, y[, dy]). This will automatically compare the
+    results from a single Gaussian fit using `fit_gaussian`, and return the
+    results from the model that yields the minimum BIC.
+    """
+
+    # Defaults.
+
+    dy, return_uncertainty, absolute_sigma = _errors(x, dy, return_uncertainty)
+    popt = [np.nan, np.nan, np.nan, np.nan, np.nan, np.nan]
+    cvar = popt.copy()
+
+    # Single Gaussian fit.
+
+    popt_a, cvar_a = fit_gaussian(x=x, y=y, dy=dy, return_uncertainty=True)
+    if not all(np.isfinite(popt_a)):
+        return (popt, cvar) if return_uncertainty else popt
+    BIC_a = 3.0 * np.log(x.size)
+    BIC_a -= np.nansum(((y - gaussian(x, *popt_a)) / dy)**2)
+
+    # Double Gaussian fit.
+
+    p0 = [popt_a[0] + popt_a[1], popt_a[1], 0.8 * popt_a[2],
+          popt_a[0] - popt_a[1], popt_a[1], 0.8 * popt_a[2]]
+    try:
+        popt_b, cvar_b = curve_fit(double_gaussian, x, y, sigma=dy, p0=p0,
+                                   absolute_sigma=absolute_sigma,
+                                   maxfev=100000)
+        cvar_b = np.diag(cvar_b)**0.5
+    except Exception:
+        return (popt, cvar) if return_uncertainty else popt
+    BIC_b = 6.0 * np.log(x.size)
+    BIC_b -= np.nansum(((y - double_gaussian(x, *popt_b)) / dy)**2)
+
+    return (popt_b, cvar_b) if return_uncertainty else popt_b
+
+    # Currently just return the double gaussian fit.
+    # How do we distinguish which is the better fit?
+
+    if min(popt_b[2], popt_b[5]) / max(popt_b[2], popt_b[5]) < 0.1:
+        popt[:3], cvar[:3] = popt_a, cvar_a
+    else:
+        popt, cvar = popt_b, cvar_b
     return (popt, cvar) if return_uncertainty else popt
 
 
@@ -78,6 +124,20 @@ def get_gaussthick_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
     if np.isfinite(popt[0]):
         return (popt[0], cvar[0]) if return_uncertainty else popt[0]
     return (fill, fill) if return_uncertainty else fill
+
+
+def get_doublegauss_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
+    """Return the line center from a fit of two Gaussians to the spectrum."""
+    if return_uncertainty is None:
+        return_uncertainty = dy is not None
+    popt, cvar = fit_double_gaussian(x, y, dy, return_uncertainty=True)
+    if np.isfinite(popt[2]) and np.isfinite(popt[5]):
+        if popt[2] > popt[5]:
+            return (popt[0], cvar[0]) if return_uncertainty else popt[0]
+        else:
+            return (popt[3], cvar[3]) if return_uncertainty else popt[3]
+    else:
+        (fill, fill) if return_uncertainty else fill
 
 
 def get_gaussian_width(x, y, dy=None, return_uncertainty=None, fill=1e50):
@@ -111,6 +171,11 @@ def gaussian_thick(x, x0, dV, Tex, tau0):
     """Optically thick Gaussian line."""
     tau = gaussian(x, x0, dV, tau0)
     return Tex * (1. - np.exp(-tau))
+
+
+def double_gaussian(x, x0, dV0, Tb0, x1, dV1, Tb1):
+    """Double Gaussian function."""
+    return gaussian(x, x0, dV0, Tb0) + gaussian(x, x1, dV1, Tb1)
 
 
 def SHO(x, A, y0):
