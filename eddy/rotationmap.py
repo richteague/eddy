@@ -889,8 +889,8 @@ class rotationmap(datacube):
 
         # Flared emission surface.
 
-        params['z0'] = params.pop('z0', None)
-        params['psi'] = params.pop('psi', None)
+        params['z0'] = params.pop('z0', 0.0)
+        params['psi'] = params.pop('psi', 1.0)
         params['r_taper'] = params.pop('r_taper', None)
         params['q_taper'] = params.pop('q_taper', None)
         params['r_cavity'] = params.pop('r_cavity', None)
@@ -898,9 +898,9 @@ class rotationmap(datacube):
 
         # Warp parameters.
 
-        params['w_i'] = params.pop('w_i', 0.0)
-        params['w_r'] = params.pop('w_r', 0.5 * max(self.xaxis))
-        params['w_t'] = params.pop('w_t', 0.0)
+        params['w_i'] = params.pop('w_i', None)
+        params['w_r'] = params.pop('w_r', None)
+        params['w_t'] = params.pop('w_t', None)
         params['shadowed'] = params.pop('shadowed', False)
 
         # Masking parameters.

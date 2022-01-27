@@ -48,7 +48,7 @@ class datacube(object):
 
     # -- PIXEL DEPROJECTION -- #
 
-    def disk_coords(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=None, psi=None,
+    def disk_coords(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=1.0,
                     r_cavity=0.0, r_taper=None, q_taper=None, w_i=0.0, w_r=1.0,
                     w_t=0.0, z_func=None, outframe='cylindrical',
                     shadowed=False, **_):
@@ -185,13 +185,15 @@ class datacube(object):
         if (w_i is not None) != (w_t is not None) != (w_r is not None):
             raise ValueError(msg)
 
-        flared = r_taper is not None or w_i is not None or r_cavity is not None
+        flared = r_taper is not None or w_i != 0.0 or r_cavity is not None
 
         # Select the quickest pixel deprojection method.
         # First round is analytical forms where `z_func` is not specified.
 
+        z = None
+
         if z_func is None:
-            if z0 is None or z0 == 0.0:
+            if z0 == 0.0:
                 r, t = self._get_midplane_polar_coords(x0, y0, inc, PA)
                 z = np.zeros(r.shape)
             elif z0 > 0.0 and psi == 1.0 and not flared:
@@ -200,36 +202,36 @@ class datacube(object):
         # Here `z_func` can still be not provided, but must be defined based
         # on the parameters provided (i.e., psi != 1.0).
 
-        r_cavity = 0.0 if r_cavity is None else r_cavity
-        r_taper = np.inf if r_taper is None else r_taper
-        q_taper = 1.0 if q_taper is None else q_taper
-        w_i = 0.0 if w_i is None else w_i
-        w_r = 1.0 if w_r is None else w_r
-        w_t = 0.0 if w_t is None else w_t
+        if z is None:
 
-        # Define the emission surface and warp functions.
+            r_cavity = 0.0 if r_cavity is None else r_cavity
+            r_taper = np.inf if r_taper is None else r_taper
+            q_taper = 1.0 if q_taper is None else q_taper
 
-        if z_func is None:
-            def z_func(r_in):
+            # Define the emission surface and warp functions.
+
+            if z_func is None:
+                def z_func(r_in):
+                    r = np.clip(r_in - r_cavity, a_min=0.0, a_max=None)
+                    z = r**psi * np.exp(-np.power(r / r_taper, q_taper))
+                    return np.clip(z0 * z, a_min=0.0, a_max=None)
+
+            def w_func(r_in, t):
                 r = np.clip(r_in - r_cavity, a_min=0.0, a_max=None)
-                z = r**psi * np.exp(-np.power(r / r_taper, q_taper))
-                return np.clip(z0 * z, a_min=0.0, a_max=None)
+                warp = np.radians(w_i) * np.exp(-0.5 * (r / w_r)**2)
+                return r * np.tan(warp * np.sin(t - np.radians(w_t)))
 
-        def w_func(r_in, t):
-            r = np.clip(r_in - r_cavity, a_min=0.0, a_max=None)
-            warp = np.radians(w_i) * np.exp(-0.5 * (r / w_r)**2)
-            return r * np.tan(warp * np.sin(t - np.radians(w_t)))
+            # Select the deprojection method. `shadowed` uses the slower (but
+            # more robust) forward modelling approach, rather than an iterative
+            # method.
 
-        # Select the deprojection method. `shadowed` uses the slower (but more
-        # robust) forward modelling approach, rather than an iterative method.
-
-        if shadowed:
-            coords = self._get_shadowed_coords(x0, y0, inc, PA,
-                                               z_func, w_func)
-        else:
-            coords = self._get_flared_coords(x0, y0, inc, PA,
-                                             z_func, w_func)
-        r, t, z = coords
+            if shadowed:
+                coords = self._get_shadowed_coords(x0, y0, inc, PA,
+                                                   z_func, w_func)
+            else:
+                coords = self._get_flared_coords(x0, y0, inc, PA,
+                                                 z_func, w_func)
+            r, t, z = coords
 
         # Return the values.
 
