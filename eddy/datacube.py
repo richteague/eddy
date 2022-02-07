@@ -51,7 +51,7 @@ class datacube(object):
     def disk_coords(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=1.0,
                     r_cavity=0.0, r_taper=None, q_taper=None, w_i=0.0, w_r=1.0,
                     w_t=0.0, z_func=None, outframe='cylindrical',
-                    shadowed=False, **_):
+                    shadowed=False, force_side=None, **_):
         r"""
         Get the disk coordinates given certain geometrical parameters and an
         emission surface. The emission surface is most simply described as a
@@ -157,6 +157,12 @@ class datacube(object):
                 coordinates. Either ``'cartesian'`` or ``'cylindrical'``.
             shadowed (Optional[bool]): Whether to use the slower, but more
                 robust method for deprojecting pixel values.
+            force_side (Optional[str]): Force the emission surface to be a
+                particular side, i.e., ``force_side='front'`` will force the
+                ``z_func`` argument to be positive, while ``force_side='back'``
+                will force ``z_func`` to be negative. Setting
+                ``force_side=None`` will allow any limit for the emission
+                height.
 
         Returns:
             array, array, array: Three coordinate arrays with ``(r, phi, z)``,
@@ -214,7 +220,11 @@ class datacube(object):
                 def z_func(r_in):
                     r = np.clip(r_in - r_cavity, a_min=0.0, a_max=None)
                     z = r**psi * np.exp(-np.power(r / r_taper, q_taper))
-                    return np.clip(z0 * z, a_min=0.0, a_max=None)
+                    if force_side is None:
+                        return z0 * z
+                    a_min = 0.0 if force_side == 'front' else None
+                    a_max = 0.0 if force_side == 'back' else None
+                    return np.clip(z0 * z, a_min=a_min, a_max=a_max)
 
             def w_func(r_in, t):
                 r = np.clip(r_in - r_cavity, a_min=0.0, a_max=None)
