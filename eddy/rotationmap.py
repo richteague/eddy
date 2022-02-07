@@ -37,6 +37,7 @@ class rotationmap(datacube):
     """
 
     priors = {}
+    SHO_priors = {}
 
     def __init__(self, path, FOV=None, uncertainty=None, downsample=None):
         datacube.__init__(self, path=path, FOV=FOV, fill=None)
@@ -259,13 +260,13 @@ class rotationmap(datacube):
         return to_return if len(to_return) > 1 else to_return[0]
 
     def fit_annuli(self, rpnts=None, rbins=None, x0=0.0, y0=0.0, inc=0.0,
-                   PA=0.0, z0=None, psi=None, r_cavity=None, r_taper=None,
+                   PA=0.0, z0=0.0, psi=1.0, r_cavity=None, r_taper=None,
                    q_taper=None, w_i=None, w_r=None, w_t=None, z_func=None,
                    shadowed=False, phi_min=None, phi_max=None,
                    exclude_phi=False, abs_phi=False, mask_frame='disk',
                    user_mask=None, fit_vrot=True, fit_vrad=True,
                    fix_vlsr=False, plots=None, returns=None,
-                   optimize_kwargs=None):
+                   optimize_kwargs=None, MCMC=False):
         r"""
         Splits the map into concentric annuli based on the geometrical
         parameters, then fits each annnulus with a simple harmonic oscillator
@@ -391,6 +392,7 @@ class rotationmap(datacube):
                                            fit_vrot=fit_vrot,
                                            fit_vrad=fit_vrad,
                                            fix_vlsr=fix_vlsr,
+                                           MCMC=MCMC,
                                            optimize_kwargs=optimize_kwargs)
             except ValueError:
                 popt = np.ones(nparams) * np.nan
@@ -487,11 +489,10 @@ class rotationmap(datacube):
         return vrot * np.cos(pvals) + vrad * np.sin(pvals) + vlsr
 
     def _fit_SHO(self, x, y, dy, fit_vrot=True, fit_vrad=True, fix_vlsr=False,
-                 optimize_kwargs=None):
+                 optimize_kwargs=None, MCMC=False):
         """Fit the points with a simple harmonic oscillator."""
 
         from .helper_functions import SHO_double
-        from scipy.optimize import curve_fit
 
         # Guess the starting parameters.
 
@@ -506,47 +507,58 @@ class rotationmap(datacube):
                 def func(x, *params):
                     return SHO_double(x, *params)
                 p0 = [vrot, vrad, vlsr]
-                nparam = 3
+                priors = ['vrot', 'vrad', 'vlsr']
             elif fit_vrot and (not fit_vrad):
                 def func(x, *params):
                     return SHO_double(x, params[0], 0.0, params[-1])
                 p0 = [vrot, vlsr]
-                nparam = 2
+                priors = ['vrot', 'vlsr']
             elif (not fit_vrot) and fit_vrad:
                 def func(x, *params):
-                    return SHO_double(x, params[0], 0.0, params[-1])
-                p0 = [vrot, vlsr]
-                nparam = 2
+                    return SHO_double(x, 0.0, params[0], params[-1])
+                p0 = [vrad, vlsr]
+                priors = ['vrad', 'vlsr']
             else:
                 def func(x, *params):
                     return SHO_double(x, 0.0, 0.0, *params)
                 p0 = [vlsr]
-                nparam = 1
+                priors = ['vlsr']
         else:
             if fit_vrot and fit_vrad:
                 def func(x, *params):
                     return SHO_double(x, *params, fix_vlsr)
                 p0 = [vrot, vrad]
-                nparam = 2
+                priors = ['vrot', 'vrad']
             elif fit_vrot and (not fit_vrad):
                 def func(x, *params):
                     return SHO_double(x, *params, 0.0, fix_vlsr)
                 p0 = [vrot]
-                nparam = 1
+                priors = ['vrot']
             elif (not fit_vrot) and fit_vrad:
                 def func(x, *params):
                     return SHO_double(x, 0.0, *params, fix_vlsr)
                 p0 = [vrad]
-                nparam = 1
+                priors = ['vrad']
             else:
                 raise ValueError("You must fit one parameter!")
 
         # Returns if no values are provided.
 
         if len(y) == 0:
-            popt = np.empty(nparam)
+            popt = np.empty(len(p0))
             cvar = popt.copy()
             return popt, cvar
+
+        # Send values to with curve_fit or emcee.
+
+        if MCMC:
+            return self._SHO_MCMC(x, y, dy, func, p0, priors, optimize_kwargs)
+        else:
+            return self._SHO_chi2(x, y, dy, func, p0, optimize_kwargs)
+
+    def _SHO_chi2(self, x, y, dy, func, p0, optimize_kwargs=None):
+        """Use scipy.optimize.curve_fit for the fitting."""
+        from scipy.optimize import curve_fit
 
         # Set up the optimization.
 
@@ -562,9 +574,72 @@ class rotationmap(datacube):
             popt, cvar = curve_fit(func, x, y, **kw)
             cvar = np.diag(cvar)**0.5
         except (ValueError, TypeError):
-            popt = np.empty(nparam)
+            popt = np.empty(len(p0))
             cvar = popt.copy()
         return popt, cvar
+
+    def _SHO_MCMC(self, x, y, dy, func, p0, priors, optimize_kwargs=None):
+        """Use an MCMC sampler to model the posteriors."""
+
+        # Set up the optimization.
+
+        kw = {} if optimize_kwargs is None else optimize_kwargs
+        if kw.pop('mcmc', 'emcee') == 'zeus':
+            EnsembleSampler = zeus.EnsembleSampler
+        else:
+            EnsembleSampler = emcee.EnsembleSampler
+        nwalkers = kw.pop('nwalkers', 12)
+        nburnin = kw.pop('nburnin', 250)
+        nsteps = kw.pop('nsteps', 100)
+        scatter = kw.pop('scatter', 1e-3)
+        progress = kw.pop('progress', True)
+        moves = kw.pop('moves', None)
+        pool = kw.pop('pool', None)
+
+        # Check that the starting positions are OK. If not, return NaN.
+        # TODO: Check how to handle this in the model making.
+
+        if not np.isfinite(np.sum([rotationmap.SHO_priors[p](t)
+                                   for t, p in zip(p0, priors)])):
+            return [np.nan for _ in p0], [np.nan for _ in p0]
+
+        # Run the EnsembleSampler
+
+        p0 = random_p0(p0, scatter, nwalkers)
+        sampler = EnsembleSampler(nwalkers,
+                                  p0.shape[1],
+                                  self._SHO_ln_probability,
+                                  args=[func, priors, x, y, dy],
+                                  moves=moves,
+                                  pool=pool)
+        sampler.run_mcmc(p0, nburnin + nsteps, progress=progress, **kw)
+
+        # Extract the median and (symmetric) uncertainties.
+
+        samples = sampler.get_chain(discard=nburnin, flat=True)
+        samples = np.percentile(samples, [16, 50, 84], axis=0)
+        return samples[1], 0.5 * (samples[2] - samples[0])
+
+    def _SHO_ln_probability(self, theta, func, priors, x, y, dy):
+        """Log-probablility function."""
+        lnp = self._SHO_ln_prior(theta, priors)
+        if np.isfinite(lnp):
+            return lnp + self._SHO_ln_likelihood(theta, func, x, y, dy)
+        return -np.inf
+
+    def _SHO_ln_prior(self, theta, priors):
+        """Priors for the MCMC fitting of the annuli."""
+        lnp = 0.0
+        for t, p in zip(theta, priors):
+            lnp += rotationmap.SHO_priors[p](t)
+            if not np.isfinite(lnp):
+                return lnp
+        return lnp
+
+    def _SHO_ln_likelihood(self, theta, func, x, y, dy):
+        """Log-likelihood for the MCMC fitting of the annuli."""
+        lnx2 = -0.5 * np.sum(np.power((y - func(x, *theta)) / dy, 2))
+        return lnx2 if np.isfinite(lnx2) else -np.inf
 
     def _get_radial_bins(self, rpnts=None, rbins=None):
         """Return default radial bins."""
@@ -604,6 +679,32 @@ class rotationmap(datacube):
             def prior(p):
                 return -0.5 * ((args[0] - p) / args[1])**2
         rotationmap.priors[param] = prior
+
+    def set_SHO_prior(self, param, args, type='flat'):
+        """
+        Set the prior for the given parameter for the SHO fitting. There are
+        two types of priors currently usable, ``'flat'`` which requires
+        ``args=[min, max]`` while for ``'gaussian'`` you need to specify
+        ``args=[mu, sig]``. The three ``params`` which are available are
+        ``'vrot'``, ``'vrad'`` and ``'vlsr'``.
+
+        Args:
+            param (str): Name of the parameter.
+            args (list): Values to use depending on the type of prior.
+            type (optional[str]): Type of prior to use.
+        """
+        type = type.lower()
+        if type not in ['flat', 'gaussian']:
+            raise ValueError("type must be 'flat' or 'gaussian'.")
+        if type == 'flat':
+            def prior(p):
+                if not min(args) <= p <= max(args):
+                    return -np.inf
+                return np.log(1.0 / (args[1] - args[0]))
+        else:
+            def prior(p):
+                return -0.5 * ((args[0] - p) / args[1])**2
+        rotationmap.SHO_priors[param] = prior
 
     def plot_data(self, vmin=None, vmax=None, ivar=None, return_fig=False):
         """
@@ -750,6 +851,12 @@ class rotationmap(datacube):
         self.set_prior('vr_q', [-2.0, 2.0], 'flat')
         self.set_prior('r_pressure', [0.0, 3.0*self.xaxis.max()], 'flat')
         self.set_prior('w_pressure', [0.0, 1e2], 'flat')
+
+        # SHO functions.
+
+        self.set_SHO_prior('vrot', [-3e3, 3e3], 'flat')
+        self.set_SHO_prior('vrad', [-1e2, 1e2], 'flat')
+        self.set_SHO_prior('vlsr', [-1e4, 1e4], 'flat')
 
     def _ln_prior(self, params):
         """Log-priors."""
@@ -1023,7 +1130,8 @@ class rotationmap(datacube):
     def save_model(self, samples=None, params=None, model=None, filename=None,
                    overwrite=True):
         """
-        Save the model as a FITS file.
+        Save the model as a FITS file. If you have used ``downsample`` when
+        loading the cube data, _this will not work_.
         """
         from astropy.io import fits
         if model is None:

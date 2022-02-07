@@ -8,7 +8,7 @@ import numpy as np
 
 def random_p0(p0, scatter, nwalkers):
     """Introduce scatter to starting positions."""
-    p0 = np.squeeze(p0)
+    p0 = np.atleast_1d(np.squeeze(p0))
     dp0 = np.random.randn(nwalkers * len(p0)).reshape(nwalkers, len(p0))
     dp0 = np.where(p0 == 0.0, 1.0, p0)[None, :] * (1.0 + scatter * dp0)
     return np.where(p0[None, :] == 0.0, dp0 - 1.0, dp0)
