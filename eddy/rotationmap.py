@@ -588,8 +588,8 @@ class rotationmap(datacube):
             EnsembleSampler = zeus.EnsembleSampler
         else:
             EnsembleSampler = emcee.EnsembleSampler
-        nwalkers = kw.pop('nwalkers', 12)
-        nburnin = kw.pop('nburnin', 250)
+        nwalkers = kw.pop('nwalkers', 128)
+        nburnin = kw.pop('nburnin', 200)
         nsteps = kw.pop('nsteps', 100)
         scatter = kw.pop('scatter', 1e-3)
         progress = kw.pop('progress', True)
@@ -1005,9 +1005,9 @@ class rotationmap(datacube):
 
         # Warp parameters.
 
-        params['w_i'] = params.pop('w_i', None)
-        params['w_r'] = params.pop('w_r', None)
-        params['w_t'] = params.pop('w_t', None)
+        params['w_i'] = params.pop('w_i', 0.0)
+        params['w_r'] = params.pop('w_r', 0.0)
+        params['w_t'] = params.pop('w_t', 0.0)
         params['shadowed'] = params.pop('shadowed', False)
 
         # Masking parameters.

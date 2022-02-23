@@ -214,6 +214,10 @@ class datacube(object):
             r_taper = np.inf if r_taper is None else r_taper
             q_taper = 1.0 if q_taper is None else q_taper
 
+            w_i = 0.0 if w_i is None else w_i
+            w_t = 0.0 if w_t is None else w_t
+            w_r = 0.0 if w_r is None else w_r
+
             # Define the emission surface and warp functions.
 
             if z_func is None:
@@ -226,10 +230,10 @@ class datacube(object):
                     a_max = 0.0 if force_side == 'back' else None
                     return np.clip(z0 * z, a_min=a_min, a_max=a_max)
 
-            def w_func(r_in, t):
+            def w_func(r_in, t_in):
                 r = np.clip(r_in - r_cavity, a_min=0.0, a_max=None)
                 warp = np.radians(w_i) * np.exp(-0.5 * (r / w_r)**2)
-                return r * np.tan(warp * np.sin(t - np.radians(w_t)))
+                return r * np.tan(warp * np.sin(t_in - np.radians(w_t)))
 
             # Select the deprojection method. `shadowed` uses the slower (but
             # more robust) forward modelling approach, rather than an iterative
@@ -363,8 +367,7 @@ class datacube(object):
 
         # Make the disk-frame coordinates.
 
-        diskframe_coords = self._get_diskframe_coords()
-        xdisk, ydisk, rdisk, tdisk = diskframe_coords
+        xdisk, ydisk, rdisk, tdisk = self._get_diskframe_coords()
         zdisk = z_func(rdisk) + w_func(rdisk, tdisk)
 
         # Incline the disk.
