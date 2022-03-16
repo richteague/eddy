@@ -748,6 +748,13 @@ class datacube(object):
             return self._readspectralaxis(a)
         return self._readrestfreq() * (1.0 - self._readvelocityaxis() / sc.c)
 
+    def force_relative_offset_axes(self):
+        """Force the use of relative offset axes."""
+        dx = (self.xaxis.max() - self.xaxis.min()) / 2.0
+        self.xaxis = np.linspace(dx, -dx, self.xaxis.size)
+        dy = (self.yaxis.max() - self.yaxis.min()) / 2.0
+        self.yaxis = np.linspace(-dy, dy, self.yaxis.size)
+
     # -- UNIT CONVERSIONS -- #
 
     def jybeam_to_Tb_RJ(self, data=None, nu=None):
