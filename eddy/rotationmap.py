@@ -41,7 +41,12 @@ class rotationmap(datacube):
 
     def __init__(self, path, FOV=None, uncertainty=None, downsample=None):
         datacube.__init__(self, path=path, FOV=FOV, fill=None)
-        self.data *= 1e3 if self.header['bunit'].lower() == 'km/s' else 1.0
+        if self.header['bunit'].lower() not in ['m/s', 'km/s']:
+            msg = "What is the velocity unit? Either `m/s` or `km/s`."
+            self.velocity_unit = input(msg)
+        else:
+            self.velocity_unit = self.header['bunit'].lower()
+        self.data *= 1e3 if self.velocity_unit == 'km/s' else 1.0
         self.mask = np.isfinite(self.data)
         self._readuncertainty(uncertainty=uncertainty, FOV=FOV)
         if downsample is not None:
@@ -674,7 +679,7 @@ class rotationmap(datacube):
             def prior(p):
                 if not min(args) <= p <= max(args):
                     return -np.inf
-                return np.log(1.0 / (args[1] - args[0]))
+                return np.log(1.0 / (max(args) - min(args)))
         else:
             def prior(p):
                 return -0.5 * ((args[0] - p) / args[1])**2
@@ -838,7 +843,7 @@ class rotationmap(datacube):
         # Warp
 
         self.set_prior('w_i', [-90.0, 90.0], 'flat')
-        self.set_prior('w_r', [0.0, self.xaxis.max()], 'flat')
+        self.set_prior('w_r', [-10.0, 10.0], 'flat')
         self.set_prior('w_t', [-180.0, 180.0], 'flat')
 
         # Velocity Profile
@@ -1006,7 +1011,7 @@ class rotationmap(datacube):
         # Warp parameters.
 
         params['w_i'] = params.pop('w_i', 0.0)
-        params['w_r'] = params.pop('w_r', 0.0)
+        params['w_r'] = params.pop('w_r', self.dpix)
         params['w_t'] = params.pop('w_t', 0.0)
         params['shadowed'] = params.pop('shadowed', False)
 
@@ -1571,6 +1576,7 @@ class rotationmap(datacube):
                 print("Change this at any time with `rotationmap.error`.")
                 self.error = 0.1 * (self.data - np.nanmedian(self.data))
         self.error = np.where(np.isnan(self.error), 0.0, abs(self.error))
+        self.error *= 1e3 if self.velocity_unit == 'km/s' else 1.0
         assert self.data.shape == self.error.shape
 
     # -- PLOTTING -- #
