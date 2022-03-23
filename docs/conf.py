@@ -63,5 +63,5 @@ if not on_rtd:
 html_theme = "sphinx_rtd_theme"
 html_static_path = ['_static']
 #html_favicon = "_static/favicon.png"
-html_logo = "_static/eddy_logo.png"
+html_logo = "_static/eddy_logo_black.png"
 html_theme_options = {"logo_only": True}
