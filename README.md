@@ -1,4 +1,12 @@
-# eddy - Extracting Disk DYnamics
+# eddy
+
+<p align='center'>
+  <br/>
+  <img src="https://github.com/richteague/eddy/blob/master/docs/_static/eddy_logo.png" width="500" height="500">
+  <br/>
+  <br/>
+  Extracting Disk Dynamics
+</p>
 
 [![status](http://joss.theoj.org/papers/2868c5ad4b6405eba1aaf1cd8ea53274/status.svg)](http://joss.theoj.org/papers/2868c5ad4b6405eba1aaf1cd8ea53274)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.1440051.svg)](https://doi.org/10.5281/zenodo.1440051)
