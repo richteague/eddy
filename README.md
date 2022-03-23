@@ -13,7 +13,11 @@
   </a>
   <a href="http://ascl.net/1901.010"><img src="https://img.shields.io/badge/ascl-1901.010-blue.svg?colorB=262255" alt="ascl:1901.010" />
   </a>
+  <br/>
+  <br/>
 </p>
+
+## What Is It?
 
 `eddy` is a suite of Python tools to recover precise velocity profiles of protoplanetary disks from Doppler shifted line emission. `eddy` makes fitting of first moment maps and the inference of a rotation velocity from an annulus of spectra a breeze.
 
