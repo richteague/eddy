@@ -1,4 +1,4 @@
-# eddy
+# eddy - Extracting Disk Dynamics
 
 <p align='center'>
   <br/>
