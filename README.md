@@ -59,6 +59,6 @@ If you use `eddy` as part of your research, please cite the [JOSS article](http:
 
 A full list of citations including dependencies can be found on the [citations](./docs/citations.md) page.
 
-## Works using `eddy`
+## Works Using `eddy`
 
 A list of the works using (or at least citing) `eddy` can be found on [ADS](https://ui.adsabs.harvard.edu/abs/2019JOSS....4.1220T/citations).
