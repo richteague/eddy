@@ -25,8 +25,8 @@ class linecube(datacube):
     # -- ROTATION PROFILE FUNCTIONS -- #
 
     def get_velocity_profile(self, rbins=None, fit_method='GP', fit_vrad=False,
-                             x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=None,
-                             psi=None, r_cavity=None, r_taper=None,
+                             x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0,
+                             psi=1.0, r_cavity=None, r_taper=None,
                              q_taper=None, w_i=None, w_r=None, w_t=None,
                              z_func=None, shadowed=False, phi_min=None,
                              phi_max=None, exclude_phi=False, abs_phi=False,
@@ -201,8 +201,8 @@ class linecube(datacube):
         return rpnts, profile, uncertainty
 
     def _velocity_profile(self, rbins=None, fit_method='GP', fit_vrad=False,
-                          x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=None,
-                          psi=None, r_cavity=None, r_taper=None, q_taper=None,
+                          x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0,
+                          psi=1.0, r_cavity=None, r_taper=None, q_taper=None,
                           w_i=None, w_r=None, w_t=None, z_func=None,
                           shadowed=False, phi_min=None, phi_max=None,
                           exclude_phi=False, abs_phi=False, mask_frame='disk',
@@ -286,7 +286,7 @@ class linecube(datacube):
 
     def get_annulus(self, r_min, r_max, phi_min=None, phi_max=None,
                     exclude_phi=False, abs_phi=False, x0=0.0, y0=0.0, inc=0.0,
-                    PA=0.0, z0=None, psi=None, r_cavity=None, r_taper=None,
+                    PA=0.0, z0=0.0, psi=1.0, r_cavity=None, r_taper=None,
                     q_taper=None, w_i=None, w_r=None, w_t=None, z_func=None,
                     shadowed=False, mask_frame='disk', user_mask=None,
                     beam_spacing=True, annulus_kwargs=None):
@@ -393,7 +393,7 @@ class linecube(datacube):
     def plot_mask(self, ax, r_min=None, r_max=None, exclude_r=False,
                   phi_min=None, phi_max=None, exclude_phi=False, abs_phi=False,
                   mask_frame='disk', mask=None, x0=0.0, y0=0.0, inc=0.0,
-                  PA=0.0, z0=None, psi=None, r_cavity=None, r_taper=None,
+                  PA=0.0, z0=0.0, psi=1.0, r_cavity=None, r_taper=None,
                   q_taper=None, w_i=None, w_r=None, w_t=None, z_func=None,
                   mask_color='k', mask_alpha=0.5, contour_kwargs=None,
                   contourf_kwargs=None, shadowed=False):
@@ -473,3 +473,112 @@ class linecube(datacube):
 
         ax.contourf(self.xaxis, self.yaxis, mask, [-.5, .5], **contourf_kwargs)
         ax.contour(self.xaxis, self.yaxis, mask, 1, **contour_kwargs)
+
+    def get_spectrum(self, coords, x0=0.0, y0=0.0, inc=0.0, PA=0.0,
+                     z0=0.0, psi=1.0, z_func=None, frame='sky',
+                     coord_type='cartesian', area=0.0, beam_weighting=False,
+                     return_mask=False):
+        """
+        Return a spectrum at a position defined by a coordinates given either
+        in sky-frame position (``frame='sky'``) or a disk-frame location
+        (``frame='disk'``). The coordinates can be either in a cartesian system
+        (``coord_type='cartesian'``) or cylindrical system
+        (``coord_type='cylindrical'``).
+
+        By default the returned spectrum is extracted at the pixel closest to
+        the provided coordinates. If ``area`` is set to a positive value, then
+        a beam-shaped area is averaged over, where ``area`` sets the size of
+        this region in number of beams. For example ``area=2.0`` will result
+        in an average over an area twice the size of the beam.
+
+        If an area is averaged over, you can also weight the pixels by the beam
+        response with ``beam_weighting=True``. This will reduce the weight of
+        pixels that are further away from the beam center.
+
+         Finally, to check that you're extracting what you think you are, you
+         can return the mask (and weights) used for the extraction with
+         ``return_mask=True``. Note that if ``beam_weighting=False`` then all
+         ``weights`` will be 1.
+
+         TODO: Check that the returned uncertainties are reasonable.
+
+        Args:
+            coords (tuple): The coordinates from where you want to extract a
+                spectrum. Must be a length 2 tuple.
+            x0 (Optional[float]): RA offset in [arcsec].
+            y0 (Optional[float]): Dec offset in [arcsec].
+            inc (Optional[float]): Inclination of source in [deg]. Only
+                required for ``frame='disk'``.
+            PA (Optional[float]): Position angle of source in [deg]. Only
+                required for ``frame='disk'``.
+            frame (Optional[str]): The frame that the ``coords`` are given.
+                Either ``'disk'`` or ``'sky'``.
+            coord_type (Optional[str]): The type of coordinates given, either
+                ``'cartesian'`` or ``'cylindrical'``.
+            area (Optional[float]): The area to average over in units of the
+                beam area. Note that this take into account the beam aspect
+                ratio and position angle. For a single pixel extraction use
+                ``area=0.0``.
+            beam_weighting (Optional[bool]): Whether to use the beam response
+                function to weight the averaging of the spectrum.
+            return_mask (Optional[bool]): Whether to return the mask and
+                weights used to extract the spectrum.
+
+        Retuns (if ``return_mask=False``):
+            x, y, dy (arrays): The velocity axis, extracted spectrum and
+            associated uncertainties.
+        (if ``return_mask=True``):
+            mask, weights (arrays): Arrays of the mask used to extract the
+            spectrum and the weighted used for the averaging.
+        """
+
+        # TODO:
+        #   1 - Check if it's three coordinates, or just two.
+        #   2 - Check which frame it's in.
+
+        # Convert the input coordinate into on-sky cartesian coordinates
+        # relative to the center of the image.
+
+        if frame.lower() == 'sky':
+            if inc != 0.0 or PA != 0.0:
+                message = "WARNING: You shouldn't need to specify `inc` or "
+                message += "`PA` when using `frame='sky'`."
+                print(message)
+            c1 = np.squeeze(coords[0])
+            c2 = np.squeeze(coords[1])
+            if coord_type.lower() == 'cartesian':
+                x, y = c1 + x0, c2 + y0
+            elif coord_type.lower() == 'cylindrical':
+                x = x0 + c1 * np.cos(c2 - np.radians(90.0))
+                y = y0 - c1 * np.sin(c2 - np.radians(90.0))
+        elif frame.lower() == 'disk':
+            x, y = self.disk_to_sky(coords=coords, coord_type=coord_type,
+                                    inc=inc, PA=PA, x0=x0, y0=y0)
+        assert x.size == y.size == 1
+
+        # Define the area to average over.
+
+        if area == 0.0:
+            x_pix = abs(self.xaxis - x).argmin()
+            y_pix = abs(self.yaxis - y).argmin()
+            mask = np.zeros(self.data[0].shape)
+            weights = np.zeros(mask.shape)
+            mask[y_pix, x_pix] = 1
+            weights[y_pix, x_pix] = 1
+        elif area > 0.0:
+            mask = self._beam_mask(x, y, stretch=area)
+            weights = self._beam_mask(x, y, stretch=area, response=True)
+        else:
+            raise ValueError("`area` must be a non-negative value.")
+        weights = weights if beam_weighting else mask
+
+        # If requested, return the mask and the weighting instead.
+
+        if return_mask:
+            return mask, weights
+
+        # Otherwise, extract the spectrum and average it.
+
+        y = [np.average(c * mask, weights=weights) for c in self.data]
+        dy = max(1.0, mask.sum() * self.beams_per_pix)**-0.5 * self.rms
+        return self.velax, np.array(y), np.array([dy for _ in y])
