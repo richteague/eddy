@@ -1,0 +1,259 @@
+# Default parameters and priors for `eddy.rotationmap.fit_map`.
+# Each parameter is a dictionary with a default value, `default`, the prior
+# values, `values`, and the type of prior, `type`. The type of prior can either
+# be 'flat', in which case `values` describes the minimum and maximum values
+# (inclusive), with a single value denoting a symmetric range about zero, or
+# 'gaussian', where `values` describes the mean and standard deviation of the
+# Gaussian prior distribution.
+
+# Source Properties
+
+x0:
+    default: 0.0
+    prior_type: 'flat'
+    prior_values:
+        - 0.5
+
+y0:
+    default: 0.0
+    prior_type: 'flat'
+    prior_values:
+        - 0.5
+
+inc:
+    default: 0.0
+    prior_type: 'flat'
+    prior_values:
+        - 90.0
+
+PA:
+    default: 0.0
+    prior_type: 'flat'
+    prior_values:
+        - 360.0
+
+vlsr:
+    default: 0.0
+    prior_type: 'flat'
+    prior_values:
+        - 10000.0
+
+dist:
+    default: 100.0
+    prior_type: 'flat'
+    prior_values:
+        - 0.0
+        - 1000.0
+
+# Emission Surface - controlled by `z0` and `r_taper`.
+
+z0:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 0.0
+        - 5.0
+
+psi:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 0.0
+        - 5.0
+
+r_cavity:
+    default: 0.0
+    prior_type: 'flat'
+    prior_values:
+        - 0.0
+        - 1000.0
+
+r_taper:
+    default: .inf
+    prior_type: 'flat'
+    prior_values:
+        - 0.0
+        - .inf
+
+q_taper:
+    default: 1.0
+    prior_type: 'flat'
+    prior_values:
+        - 0.0
+        - 15.0
+
+# Disk Warp - controlled by `w_i`
+
+w_i:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 90.0
+
+w_r:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 10.0
+
+w_t:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 180.0
+
+# Disk Surface Density - controlled by `mdisk`.
+
+mdisk:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 10.0
+
+r_in:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 0.0
+        - 10.0
+
+r_out:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 0.0
+        - 100.0
+
+gamma:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - -20.0
+        - 20.0
+
+# Velocity Profiles
+
+mstar:
+    default: 1.0
+    prior_type: 'flat'
+    prior_values:
+        - 0.01
+        - 10.0
+
+r_pressure:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 0.0
+        - 10.0
+
+w_pressure:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 0.0
+        - 100.0
+
+vp_100:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 0.0
+        - 10000.0
+
+vp_q:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - -2.0
+        - 0.0
+
+vp_rtaper:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 0.0
+        - 1000.0
+
+vp_qtaper:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 2.0
+
+vr_100:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 1000.0
+
+vr_q:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 2.0
+
+vr_rtaper:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 0.0
+        - 1000.0
+
+vr_qtaper:
+    default: null
+    prior_type: 'flat'
+    prior_values:
+        - 2.0
+
+# Mask properties.
+
+r_min:
+    default: 0.0
+    prior_type: 'flat'
+    prior_values:
+        - -10.0
+        - 10.0
+
+r_max:
+    default: 10.0
+    prior_type: 'flat'
+    prior_values:
+        - 0.0
+        - 20.0
+
+exclude_r:
+    default: False
+    prior_type: null
+
+phi_min:
+    default: -180.0
+    prior_type: null
+
+phi_max:
+    default: 180.0
+    prior_type: null
+
+exclude_phi:
+    default: False
+    prior_type: null
+
+abs_phi:
+    default: False
+    prior_type: null
+
+v_min:
+    default: -10000.0
+    prior_type: null
+
+v_max:
+    default: 10000.0
+    prior_type: null
+
+exclude_v:
+    default: False
+    prior_type: null
+
+beam:
+    default: False
+    prior_type: null

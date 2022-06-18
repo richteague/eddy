@@ -22,6 +22,10 @@ class datacube(object):
             square field of view with sides of `FOV` [arcsec].
         velocity_range (Optional[list]): A tuple or list of the minimum and
             maximum velocities in [m/s] to clip the data cube to.
+        fill (Optional[float]): Replace all ``NaN`` values with this value.
+        force_center (Optional[bool]): If ``True`` define the spatial axes such
+            that they describe offset from the array center in [arcsec]. This
+            is useful if the FITS header does not contain axis information.
     """
 
     flared_niter = 5
@@ -32,12 +36,14 @@ class datacube(object):
     msun = 1.98847e30
     fwhm = 2. * np.sqrt(2 * np.log(2))
 
-    def __init__(self, path, FOV=None, velocity_range=None, fill=None):
+    def __init__(self, path, FOV=None, velocity_range=None, fill=None,
+                 force_center=False):
 
         # Read in the data
 
         self.path = path
-        self._read_FITS(path=self.path, fill=fill)
+        self._read_FITS(path=self.path, fill=fill,
+                        force_center=force_center)
 
         # Clip down the cube.
 
@@ -468,7 +474,7 @@ class datacube(object):
 
     # -- DATA I/O -- #
 
-    def _read_FITS(self, path, fill=None):
+    def _read_FITS(self, path, fill=None, force_center=False):
         """Reads the data from the FITS file."""
 
         # File names.
@@ -476,19 +482,27 @@ class datacube(object):
         self.path = os.path.expanduser(path)
         self.fname = self.path.split('/')[-1]
 
-        # FITS data.
+        # Read in the data and, if necessary, fill the NaNs with default
+        # values. Note that in the case of multiple data fields, we need to
+        # think of something different.
 
         self.header = fits.getheader(path)
         self.data = np.squeeze(fits.getdata(self.path))
         if fill is not None:
             self.data = np.where(np.isfinite(self.data), self.data, fill)
 
-        # Position axes.
+        # Position axes. Two options here, either try to build the axis based
+        # on the information in the header, or if force_center=True then return
+        # an axis where the offset is relative to the image center
 
-        self.xaxis = self._readpositionaxis(a=1)
-        self.yaxis = self._readpositionaxis(a=2)
-        self.xaxis -= 0.5*self.dpix
-        self.yaxis -= 0.5*self.dpix
+        if force_center:
+            self.xaxis = self._forcepositionaxis(a=1)
+            self.yaxis = self._forcepositionaxis(a=2)
+        else:
+            self.xaxis = self._readpositionaxis(a=1)
+            self.yaxis = self._readpositionaxis(a=2)
+            self.xaxis -= 0.5*self.dpix
+            self.yaxis -= 0.5*self.dpix
 
         # Spectral axis.
 
@@ -668,7 +682,16 @@ class datacube(object):
                 a_del = 1.0 * self._user_pixel_scale
             a_pix = a_len / 2.0 + 0.5
         axis = (np.arange(a_len) - a_pix + 1.0) * a_del
-        return 3600 * axis
+        return 3600.0 * axis
+
+    def _forcepositionaxis(self, a=1):
+        """Returns the axis in [arcsec] assuming image is centered."""
+        if a not in [1, 2]:
+            raise ValueError("'a' must be in [1, 2].")
+        a_len = self.data.shape[-1] if a == 1 else self.data.shape[-2]
+        axis = np.arange(a_len).astype('float') - a_len / 2.0
+        axis += 0.5 * (abs(axis[0]) - abs(axis[-1]))
+        return axis
 
     def _readrestfreq(self):
         """Read the rest frequency."""

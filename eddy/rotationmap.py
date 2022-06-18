@@ -6,7 +6,6 @@ import zeus
 import emcee
 import numpy as np
 import scipy.constants as sc
-import pkgutil
 from .datacube import datacube
 from .helper_functions import plot_walkers, plot_corner, random_p0
 import matplotlib.pyplot as plt
@@ -36,27 +35,47 @@ class rotationmap(datacube):
             If you use ``downsample='beam'`` it will sample roughly
             spatially independent pixels using the beam major axis as the
             spacing.
+        fill (Optional[float]): Replace all ``NaN`` values with this value.
+        force_center (Optional[bool]): If ``True`` define the spatial axes such
+            that they describe offset from the array center in [arcsec]. This
+            is useful if the FITS header does not contain axis information.
     """
 
     priors = {}
     SHO_priors = {}
 
-    def __init__(self, path, FOV=None, uncertainty=None, downsample=None):
-        datacube.__init__(self, path=path, FOV=FOV, fill=None)
+    def __init__(self, path, FOV=None, uncertainty=None, downsample=None,
+                 fill=None, force_center=False):
+        datacube.__init__(self, path=path, FOV=FOV, fill=fill,
+                          force_center=force_center)
+
+        # Check to see what unit the velocities are in.
+        # TODO: Sometimes the bunit is not m/s or km/s so we might want to
+        # include a check.
+
         if self.header['bunit'].lower() not in ['m/s', 'km/s']:
             msg = "What is the velocity unit? Either `m/s` or `km/s`."
             self.velocity_unit = input(msg)
         else:
             self.velocity_unit = self.header['bunit'].lower()
+
         self.data *= 1e3 if self.velocity_unit == 'km/s' else 1.0
         self.mask = np.isfinite(self.data)
         self._readuncertainty(uncertainty=uncertainty, FOV=FOV)
+
         if downsample is not None:
             self.downsample_cube(downsample)
-        self.vlsr = np.nanmedian(self.data)
-        self.vlsr_kms = self.vlsr / 1e3
+
         self.default_parameters = self._load_default_parameters()
         self._set_default_priors()
+
+    @property
+    def vlsr(self):
+        return np.nanmedian(self.data)
+
+    @property
+    def vlsr_kms(self):
+        return self.vlsr / 1e3
 
     # -- FITTING FUNCTIONS -- #
 
