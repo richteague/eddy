@@ -12,12 +12,12 @@ def random_p0(p0, scatter, nwalkers):
     positions scattered about zero.
 
     Args:
-        p0 [list]: Starting positions.
-        scatter [float]: Scatter to apply to the starting positions.
-        nwalkers [int]: Number of walkers.
+        p0 (list): Starting positions.
+        scatter (float): Scatter to apply to the starting positions.
+        nwalkers (int): Number of walkers.
 
     Returns:
-        p0 [ndarray]: A (nwalkers, ndim) shaped array of starting positions.
+        p0 (ndarray): A (nwalkers, ndim) shaped array of starting positions.
     """
     p0 = np.atleast_1d(np.squeeze(p0))
     dp0 = np.random.randn(nwalkers * len(p0)).reshape(nwalkers, len(p0))
@@ -27,7 +27,17 @@ def random_p0(p0, scatter, nwalkers):
 
 def _errors(x, dy, return_uncertainty):
     """
-    Parse the inputs related to errors.
+    Parse the inputs related to errors for use with scipy.optimize.curve_fit.
+
+    Args:
+        x (array): Dependent variable.
+        dy (array): Uncertainty.
+        return_uncertainty (bool): Whether to return the uncertainty.
+
+    Returns:
+        dy (array), return_uncertainty (bool), absolute_sigma (bool): Values
+            needed for scipy.optimize.curve_fit.
+
     """
     if return_uncertainty is None:
         return_uncertainty = dy is not None
@@ -43,6 +53,16 @@ def _errors(x, dy, return_uncertainty):
 def fit_gaussian(x, y, dy=None, return_uncertainty=None):
     """
     Fit a Gaussian form to (x, y[, dy]).
+
+    Args:
+        x (array): Dependent coordinate.
+        y (array): Data coordinate.
+        dy (Optional[array]): Uncertainties on data.
+        return_uncertainty (Optional[bool]): Whether to return uncertainties.
+
+    Returns:
+        popt (array)[, cvar(array)]: The best fit parameters and, optionally,
+        the uncertainty on those parameters.
     """
     dy, return_uncertainty, absolute_sigma = _errors(x, dy, return_uncertainty)
     p0 = get_p0_gaussian(x, y)
@@ -60,6 +80,16 @@ def fit_gaussian(x, y, dy=None, return_uncertainty=None):
 def fit_gaussian_thick(x, y, dy=None, return_uncertainty=None):
     """
     Fit an optically thick Gaussian function to (x, y[, dy]).
+
+    Args:
+        x (array): Dependent coordinate.
+        y (array): Data coordinate.
+        dy (Optional[array]): Uncertainties on data.
+        return_uncertainty (Optional[bool]): Whether to return uncertainties.
+
+    Returns:
+        popt (array)[, cvar(array)]: The best fit parameters and, optionally,
+        the uncertainty on those parameters.
     """
     dy, return_uncertainty, absolute_sigma = _errors(x, dy, return_uncertainty)
     p0 = fit_gaussian(x=x, y=y, dy=dy,
@@ -80,6 +110,16 @@ def fit_double_gaussian(x, y, dy=None, return_uncertainty=None):
     """
     Fit two Gaussian lines to (x, y[, dy]) where the maximum of the two
     Gaussians is used as the model.
+
+    Args:
+        x (array): Dependent coordinate.
+        y (array): Data coordinate.
+        dy (Optional[array]): Uncertainties on data.
+        return_uncertainty (Optional[bool]): Whether to return uncertainties.
+
+    Returns:
+        popt (array)[, cvar(array)]: The best fit parameters and, optionally,
+        the uncertainty on those parameters.
     """
 
     # Defaults.
@@ -121,6 +161,16 @@ def fit_double_gaussian_fixeddV(x, y, dy=None, return_uncertainty=None):
     """
     Same as the `fit_double_gaussian` function, but where the lines share a
     width.
+
+    Args:
+        x (array): Dependent coordinate.
+        y (array): Data coordinate.
+        dy (Optional[array]): Uncertainties on data.
+        return_uncertainty (Optional[bool]): Whether to return uncertainties.
+
+    Returns:
+        popt (array)[, cvar(array)]: The best fit parameters and, optionally,
+        the uncertainty on those parameters.
     """
 
     # Defaults.
@@ -134,8 +184,6 @@ def fit_double_gaussian_fixeddV(x, y, dy=None, return_uncertainty=None):
     popt_a, cvar_a = fit_gaussian(x=x, y=y, dy=dy, return_uncertainty=True)
     if not all(np.isfinite(popt_a)):
         return (popt, cvar) if return_uncertainty else popt
-    BIC_a = 3.0 * np.log(x.size)
-    BIC_a -= np.nansum(((y - gaussian(x, *popt_a)) / dy)**2)
 
     # Double Gaussian fit. Try first a fit where the profile is a sum of two
     # components, then use this as strong priors for a max of two component
@@ -160,15 +208,23 @@ def fit_double_gaussian_fixeddV(x, y, dy=None, return_uncertainty=None):
             popt_b = np.squeeze(popt_b)
     except Exception:
         return (popt, cvar) if return_uncertainty else popt
-    BIC_b = 6.0 * np.log(x.size)
-    BIC_b -= np.nansum(((y - double_gaussian_max_fixeddV(x, *popt_b)) / dy)**2)
-
     return (popt_b, cvar_b) if return_uncertainty else popt_b
 
 
 def get_gaussian_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
     """
     Return the line center from a Gaussian fit to the spectrum.
+
+    Args:
+        x (array): Dependent coordinate.
+        y (array): Data coordinate.
+        dy (Optional[array]): Uncertainties on data.
+        return_uncertainty (Optional[bool]): Whether to return uncertainties.
+        fill (Optional[float]): Values to return if the fit fails.
+
+    Returns:
+        popt (array)[, cvar(array)]: The best fit line center and, optionally,
+        the uncertainty on the line center.
     """
     if return_uncertainty is None:
         return_uncertainty = dy is not None
@@ -181,6 +237,17 @@ def get_gaussian_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
 def get_gaussthick_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
     """
     Return the line center from an optically thick Gaussian fit to the spectrum.
+
+    Args:
+        x (array): Dependent coordinate.
+        y (array): Data coordinate.
+        dy (Optional[array]): Uncertainties on data.
+        return_uncertainty (Optional[bool]): Whether to return uncertainties.
+        fill (Optional[float]): Values to return if the fit fails.
+
+    Returns:
+        popt (array)[, cvar(array)]: The best fit line center and, optionally,
+        the uncertainty on the line center.
     """
     if return_uncertainty is None:
         return_uncertainty = dy is not None
@@ -194,6 +261,17 @@ def get_doublegauss_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
     """
     Return the line center from a fit of two Gaussians to the spectrum. The line
     center will be of the component with the largest amplitude.
+
+    Args:
+        x (array): Dependent coordinate.
+        y (array): Data coordinate.
+        dy (Optional[array]): Uncertainties on data.
+        return_uncertainty (Optional[bool]): Whether to return uncertainties.
+        fill (Optional[float]): Values to return if the fit fails.
+
+    Returns:
+        popt (array)[, cvar(array)]: The best fit line center and, optionally,
+        the uncertainty on the line center.
     """
     if return_uncertainty is None:
         return_uncertainty = dy is not None
@@ -210,6 +288,17 @@ def get_doublegauss_fixeddV_center(x, y, dy=None, return_uncertainty=None,
     Return the line center from a fit of two Gaussians which share a width to
     the spectrum. The line  center will be of the component with the largest
     amplitude.
+
+    Args:
+        x (array): Dependent coordinate.
+        y (array): Data coordinate.
+        dy (Optional[array]): Uncertainties on data.
+        return_uncertainty (Optional[bool]): Whether to return uncertainties.
+        fill (Optional[float]): Values to return if the fit fails.
+
+    Returns:
+        popt (array)[, cvar(array)]: The best fit line center and, optionally,
+        the uncertainty on the line center.
     """
     if return_uncertainty is None:
         return_uncertainty = dy is not None
@@ -223,6 +312,17 @@ def get_doublegauss_fixeddV_center(x, y, dy=None, return_uncertainty=None,
 def get_gaussian_width(x, y, dy=None, return_uncertainty=None, fill=1e50):
     """
     Return the absolute width of a Gaussian fit to the spectrum.
+
+    Args:
+        x (array): Dependent coordinate.
+        y (array): Data coordinate.
+        dy (Optional[array]): Uncertainties on data.
+        return_uncertainty (Optional[bool]): Whether to return uncertainties.
+        fill (Optional[float]): Values to return if the fit fails.
+
+    Returns:
+        popt (array)[, cvar(array)]: The best fit line width and, optionally,
+        the uncertainty on the line width.
     """
     if return_uncertainty is None:
         return_uncertainty = dy is not None
@@ -235,6 +335,13 @@ def get_gaussian_width(x, y, dy=None, return_uncertainty=None, fill=1e50):
 def get_p0_gaussian(x, y):
     """
     Estimate (x0, dV, Tb) for the spectrum.
+
+    Args:
+        x (array): Dependent coordinate.
+        y (array): Data coordinate.
+
+    Returns:
+        p0 (array): Estimate (x0, dV, Tb) values for the provided data.
     """
     if x.size != y.size:
         raise ValueError("Mismatch in array shapes.")
