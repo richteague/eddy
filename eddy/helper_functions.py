@@ -7,7 +7,18 @@ import numpy as np
 # -- MCMC / OPTIMIZATION FUNCTIONS -- #
 
 def random_p0(p0, scatter, nwalkers):
-    """Introduce scatter to starting positions."""
+    """
+    Introduce scatter to starting positions while allowing for starting
+    positions scattered about zero.
+
+    Args:
+        p0 [list]: Starting positions.
+        scatter [float]: Scatter to apply to the starting positions.
+        nwalkers [int]: Number of walkers.
+
+    Returns:
+        p0 [ndarray]: A (nwalkers, ndim) shaped array of starting positions.
+    """
     p0 = np.atleast_1d(np.squeeze(p0))
     dp0 = np.random.randn(nwalkers * len(p0)).reshape(nwalkers, len(p0))
     dp0 = np.where(p0 == 0.0, 1.0, p0)[None, :] * (1.0 + scatter * dp0)
@@ -15,7 +26,9 @@ def random_p0(p0, scatter, nwalkers):
 
 
 def _errors(x, dy, return_uncertainty):
-    """Parse the inputs related to errors."""
+    """
+    Parse the inputs related to errors.
+    """
     if return_uncertainty is None:
         return_uncertainty = dy is not None
     dy = np.ones(x.size) * (1.0 if dy is None else dy)
@@ -28,7 +41,9 @@ def _errors(x, dy, return_uncertainty):
 
 
 def fit_gaussian(x, y, dy=None, return_uncertainty=None):
-    """Fit a gaussian to (x, y[, dy])."""
+    """
+    Fit a Gaussian form to (x, y[, dy]).
+    """
     dy, return_uncertainty, absolute_sigma = _errors(x, dy, return_uncertainty)
     p0 = get_p0_gaussian(x, y)
     try:
@@ -43,7 +58,9 @@ def fit_gaussian(x, y, dy=None, return_uncertainty=None):
 
 
 def fit_gaussian_thick(x, y, dy=None, return_uncertainty=None):
-    """Fit an optically thick Gaussian function to (x, y[, dy])."""
+    """
+    Fit an optically thick Gaussian function to (x, y[, dy]).
+    """
     dy, return_uncertainty, absolute_sigma = _errors(x, dy, return_uncertainty)
     p0 = fit_gaussian(x=x, y=y, dy=dy,
                       return_uncertainty=False)
@@ -61,9 +78,8 @@ def fit_gaussian_thick(x, y, dy=None, return_uncertainty=None):
 
 def fit_double_gaussian(x, y, dy=None, return_uncertainty=None):
     """
-    Fit two Gaussian lines to (x, y[, dy]). This will automatically compare the
-    results from a single Gaussian fit using `fit_gaussian`, and return the
-    results from the model that yields the minimum BIC.
+    Fit two Gaussian lines to (x, y[, dy]) where the maximum of the two
+    Gaussians is used as the model.
     """
 
     # Defaults.
@@ -72,7 +88,48 @@ def fit_double_gaussian(x, y, dy=None, return_uncertainty=None):
     popt = [np.nan, np.nan, np.nan, np.nan, np.nan, np.nan]
     cvar = popt.copy()
 
-    # Single Gaussian fit.
+    # Initial single Gaussian fit.
+
+    popt_a, cvar_a = fit_gaussian(x=x, y=y, dy=dy, return_uncertainty=True)
+    if not all(np.isfinite(popt_a)):
+        return (popt, cvar) if return_uncertainty else popt
+
+    # Double Gaussian fit. Try first a fit where the profile is a sum of two
+    # components, then use this as strong priors for a max of two component
+    # fit. This is because the max version is hard to optimize.
+
+    p0 = [popt_a[0] + popt_a[1], popt_a[1], 0.8 * popt_a[2],
+          popt_a[0] - popt_a[1], popt_a[1], 0.8 * popt_a[2]]
+    try:
+        popt_b, _ = curve_fit(double_gaussian_sum, x, y, sigma=dy, p0=p0,
+                                   absolute_sigma=absolute_sigma,
+                                   maxfev=100000)
+        p0 = [popt_b[0], popt_b[1], double_gaussian_sum(popt_b[0], *popt_b),
+              popt_b[3], popt_b[4], double_gaussian_sum(popt_b[3], *popt_b)]
+        popt_b, cvar_b = curve_fit(double_gaussian_max, x, y, sigma=dy, p0=p0,
+                                   absolute_sigma=absolute_sigma,
+                                   maxfev=100000)
+        cvar_b = np.diag(cvar_b)**0.5
+        if popt_b[5] > popt_b[2]:
+            popt_b = np.append(popt_b[3:], popt_b[:-3])
+    except Exception:
+        return (popt, cvar) if return_uncertainty else popt
+    return (popt_b, cvar_b) if return_uncertainty else popt_b
+
+
+def fit_double_gaussian_fixeddV(x, y, dy=None, return_uncertainty=None):
+    """
+    Same as the `fit_double_gaussian` function, but where the lines share a
+    width.
+    """
+
+    # Defaults.
+
+    dy, return_uncertainty, absolute_sigma = _errors(x, dy, return_uncertainty)
+    popt = [np.nan, np.nan, np.nan, np.nan, np.nan, np.nan]
+    cvar = popt.copy()
+
+    # Initial single Gaussian fit.
 
     popt_a, cvar_a = fit_gaussian(x=x, y=y, dy=dy, return_uncertainty=True)
     if not all(np.isfinite(popt_a)):
@@ -80,34 +137,39 @@ def fit_double_gaussian(x, y, dy=None, return_uncertainty=None):
     BIC_a = 3.0 * np.log(x.size)
     BIC_a -= np.nansum(((y - gaussian(x, *popt_a)) / dy)**2)
 
-    # Double Gaussian fit.
+    # Double Gaussian fit. Try first a fit where the profile is a sum of two
+    # components, then use this as strong priors for a max of two component
+    # fit. This is because the max version is hard to optimize.
 
     p0 = [popt_a[0] + popt_a[1], popt_a[1], 0.8 * popt_a[2],
-          popt_a[0] - popt_a[1], popt_a[1], 0.8 * popt_a[2]]
+          popt_a[0] - popt_a[1], 0.8 * popt_a[2]]
     try:
-        popt_b, cvar_b = curve_fit(double_gaussian, x, y, sigma=dy, p0=p0,
-                                   absolute_sigma=absolute_sigma,
+        popt_b, _ = curve_fit(double_gaussian_sum_fixeddV, x, y, sigma=dy,
+                              p0=p0, absolute_sigma=absolute_sigma,
+                              maxfev=100000)
+        p0 = [popt_b[0], popt_b[1],
+              double_gaussian_sum_fixeddV(popt_b[0], *popt_b),
+              popt_b[3],
+              double_gaussian_sum_fixeddV(popt_b[3], *popt_b)]
+        popt_b, cvar_b = curve_fit(double_gaussian_max_fixeddV, x, y, sigma=dy,
+                                   p0=p0, absolute_sigma=absolute_sigma,
                                    maxfev=100000)
         cvar_b = np.diag(cvar_b)**0.5
+        if popt_b[4] > popt_b[2]:
+            popt_b = [popt_b[0], popt_b[1], popt_b[4], popt_b[3], popt_b[2]]
+            popt_b = np.squeeze(popt_b)
     except Exception:
         return (popt, cvar) if return_uncertainty else popt
     BIC_b = 6.0 * np.log(x.size)
-    BIC_b -= np.nansum(((y - double_gaussian(x, *popt_b)) / dy)**2)
+    BIC_b -= np.nansum(((y - double_gaussian_max_fixeddV(x, *popt_b)) / dy)**2)
 
     return (popt_b, cvar_b) if return_uncertainty else popt_b
 
-    # Currently just return the double gaussian fit.
-    # How do we distinguish which is the better fit?
-
-    if min(popt_b[2], popt_b[5]) / max(popt_b[2], popt_b[5]) < 0.1:
-        popt[:3], cvar[:3] = popt_a, cvar_a
-    else:
-        popt, cvar = popt_b, cvar_b
-    return (popt, cvar) if return_uncertainty else popt
-
 
 def get_gaussian_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
-    """Return the line center from a Gaussian fit to the spectrum."""
+    """
+    Return the line center from a Gaussian fit to the spectrum.
+    """
     if return_uncertainty is None:
         return_uncertainty = dy is not None
     popt, cvar = fit_gaussian(x, y, dy, return_uncertainty=True)
@@ -117,7 +179,9 @@ def get_gaussian_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
 
 
 def get_gaussthick_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
-    """Return the line center from a Gaussian fit to the spectrum."""
+    """
+    Return the line center from an optically thick Gaussian fit to the spectrum.
+    """
     if return_uncertainty is None:
         return_uncertainty = dy is not None
     popt, cvar = fit_gaussian_thick(x, y, dy, return_uncertainty=True)
@@ -127,21 +191,39 @@ def get_gaussthick_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
 
 
 def get_doublegauss_center(x, y, dy=None, return_uncertainty=None, fill=1e50):
-    """Return the line center from a fit of two Gaussians to the spectrum."""
+    """
+    Return the line center from a fit of two Gaussians to the spectrum. The line
+    center will be of the component with the largest amplitude.
+    """
     if return_uncertainty is None:
         return_uncertainty = dy is not None
     popt, cvar = fit_double_gaussian(x, y, dy, return_uncertainty=True)
     if np.isfinite(popt[2]) and np.isfinite(popt[5]):
-        if popt[2] > popt[5]:
-            return (popt[0], cvar[0]) if return_uncertainty else popt[0]
-        else:
-            return (popt[3], cvar[3]) if return_uncertainty else popt[3]
+        return (popt[0], cvar[0]) if return_uncertainty else popt[0]
     else:
-        (fill, fill) if return_uncertainty else fill
+        return (fill, fill) if return_uncertainty else fill
+
+
+def get_doublegauss_fixeddV_center(x, y, dy=None, return_uncertainty=None,
+                                   fill=1e50):
+    """
+    Return the line center from a fit of two Gaussians which share a width to
+    the spectrum. The line  center will be of the component with the largest
+    amplitude.
+    """
+    if return_uncertainty is None:
+        return_uncertainty = dy is not None
+    popt, cvar = fit_double_gaussian_fixeddV(x, y, dy, return_uncertainty=True)
+    if np.isfinite(popt[2]) and np.isfinite(popt[4]):
+        return (popt[0], cvar[0]) if return_uncertainty else popt[0]
+    else:
+        return (fill, fill) if return_uncertainty else fill
 
 
 def get_gaussian_width(x, y, dy=None, return_uncertainty=None, fill=1e50):
-    """Return the absolute width of a Gaussian fit to the spectrum."""
+    """
+    Return the absolute width of a Gaussian fit to the spectrum.
+    """
     if return_uncertainty is None:
         return_uncertainty = dy is not None
     popt, cvar = fit_gaussian(x, y, dy, return_uncertainty=True)
@@ -151,7 +233,9 @@ def get_gaussian_width(x, y, dy=None, return_uncertainty=None, fill=1e50):
 
 
 def get_p0_gaussian(x, y):
-    """Estimate (x0, dV, Tb) for the spectrum."""
+    """
+    Estimate (x0, dV, Tb) for the spectrum.
+    """
     if x.size != y.size:
         raise ValueError("Mismatch in array shapes.")
     Tb = np.max(y)
@@ -173,9 +257,26 @@ def gaussian_thick(x, x0, dV, Tex, tau0):
     return Tex * (1. - np.exp(-tau))
 
 
-def double_gaussian(x, x0, dV0, Tb0, x1, dV1, Tb1):
-    """Double Gaussian function."""
+def double_gaussian_sum(x, x0, dV0, Tb0, x1, dV1, Tb1):
+    """Double Gaussian profile as sum of two Gaussians."""
     return gaussian(x, x0, dV0, Tb0) + gaussian(x, x1, dV1, Tb1)
+
+
+def double_gaussian_max(x, x0, dV0, Tb0, x1, dV1, Tb1):
+    """Double Gaussian profile as the max of two Gaussian components."""
+    return np.max([gaussian(x, x0, dV0, Tb0),
+                   gaussian(x, x1, dV1, Tb1)], axis=0)
+
+
+def double_gaussian_sum_fixeddV(x, x0, dV, Tb0, x1, Tb1):
+    """Double Gaussian profile as the sum of two Gaussians with same dV."""
+    return gaussian(x, x0, dV, Tb0) + gaussian(x, x1, dV, Tb1)
+
+
+def double_gaussian_max_fixeddV(x, x0, dV, Tb0, x1, Tb1):
+    """Double Gaussian profile as the max of two Gaussian components."""
+    return np.max([gaussian(x, x0, dV, Tb0),
+                   gaussian(x, x1, dV, Tb1)], axis=0)
 
 
 def SHO(x, A, y0):

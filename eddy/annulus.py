@@ -940,6 +940,12 @@ class annulus(object):
             vmax = [get_doublegauss_center(self.velax, s, self.rms)
                     for s in self.spectra]
             vmax, dvmax = np.array(vmax).T
+        elif method == 'doublegauss_fixeddv':
+            from .helper_functions import get_doublegauss_fixeddV_center
+            vmax = [get_doublegauss_fixeddV_center(self.velax, s, self.rms)
+                    for s in self.spectra]
+            print([np.array(s).shape for s in np.array(vmax).T])
+            vmax, dvmax = np.array(vmax).T
         else:
             raise ValueError(f"Unknown method, {method}.")
         return vmax, dvmax
