@@ -156,7 +156,7 @@ def fit_double_gaussian_fixeddV(x, y, dy=None, return_uncertainty=None):
                                    maxfev=100000)
         cvar_b = np.diag(cvar_b)**0.5
         if popt_b[4] > popt_b[2]:
-            popt_b = [popt_b[0], popt_b[1], popt_b[4], popt_b[3], popt_b[2]]
+            popt_b = [popt_b[3], popt_b[1], popt_b[4], popt_b[0], popt_b[2]]
             popt_b = np.squeeze(popt_b)
     except Exception:
         return (popt, cvar) if return_uncertainty else popt
