@@ -8,7 +8,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name="astro-eddy",
-    version="2.1.5-5",
+    version="2.1.5-6",
     author="Richard Teague",
     author_email="rteague@mit.edu",
     description=("Tools to recover expectionally precise rotation curves from "
