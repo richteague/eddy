@@ -210,8 +210,12 @@ class annulus(object):
         """
         Wrapper for the GP fitting.
 
+        TODO: Why is there a resample argument here?
+
         Args:
             p0 (optional[list]): Starting positions.
+            fit_vrad (optional[bool]): Whether to also fit for radial
+                velocities. Default is ``False``.
             optimize (optional[bool]): Run an optimization step prior to the
                 MCMC.
             nwalkers (optional[int]): Number of walkers for the MCMC.
@@ -220,10 +224,18 @@ class annulus(object):
                 posterior distributions.
             resample (optional): Type of resampling to be implemented.
             scatter (optional[float]): Scatter of walkers around ``p0``.
+            niter (optional[int]): Number of iterations to run, with each run
+                adopting the median posterior values from the previous
+                iteration as starting points.
             plots (optional[list]): List of diagnostic plots to make. Can be
                 ``'walkers'``, ``'corner'`` or ``'none'``.
             returns (optional[list]) List of values to return. Can be
                 ``'samples'``, ``'percentiles'`` or ``'none'``.
+            mcmc (optional[str]): Which MCMC backend to run, either ``'emcee'``
+                or ``'zeus'``.
+            optimize_kwargs (optional[dict]): Kwargs to pass to the initial
+                optimization of starting parameters.
+            mcmc_kwargs (optional[dict]): Kwargs to pass to the MCMC sampler.
 
         Returns:
             Dependent on what is specified in ``returns``.
@@ -1311,7 +1323,6 @@ class annulus(object):
             cb.set_label('Residual (mJy/beam)', rotation=270, labelpad=13)
         else:
             cb.set_label('Intensity (Jy/beam)', rotation=270, labelpad=13)
-        plt.tight_layout()
 
         if return_fig:
             return fig
@@ -1330,7 +1341,7 @@ class annulus(object):
             return_fig = False
 
         v0, dv0 = self.line_centroids(method=centroid_method)
-        dv0 = v0.copy() * 0.025
+        dv0 = abs(dv0)
 
         plot_kwargs = {} if plot_kwargs is None else plot_kwargs
         plot_kwargs['fmt'] = plot_kwargs.pop('fmt', 'o')
