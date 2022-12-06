@@ -8,7 +8,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name="astro-eddy",
-    version="2.1.5-7",
+    version="2.1.5-8",
     author="Richard Teague",
     author_email="rteague@mit.edu",
     description=("Tools to recover expectionally precise rotation curves from "
@@ -26,7 +26,7 @@ setup(
         "corner>=2",
         "zeus-mcmc",
         ],
-    package_data={'': ['eddy/default_parameters.yml']},
+    package_data={'eddy': ['*.yml']},
     include_package_data=True,
     classifiers=[
         "Programming Language :: Python :: 3.5",

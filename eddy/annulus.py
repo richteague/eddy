@@ -25,7 +25,8 @@ __all__ = ['annulus']
 class annulus(object):
     """
     A class containing an annulus of spectra with their associated polar angles
-    measured east of north from the redshifted major axis.
+    measured east of north from the redshifted major axis. These range from -pi
+    to +pi.
 
     Args:
         spectra (ndarray): Array of shape ``[N, M]`` of spectra to shift and
@@ -36,7 +37,6 @@ class annulus(object):
         remove_empty (optional[bool]): Remove empty spectra.
         sort_spectra (optional[bool]): Sorted the spectra into increasing
             ``theta``.
-        suppress_warnings (optional[bool]): If ``True``, suppress all warnings.
     """
 
     def __init__(self, spectra, pvals, velax, rotation='clockwise',
@@ -52,7 +52,7 @@ class annulus(object):
             raise ValueError(msg + " Must br 'clockwise' or 'anticlockwise'.")
         self.rms = self._estimate_RMS()
 
-        # Sort the spectra.
+        # Sort the spectra with increasing polar angle.
 
         if sort_spectra:
             idxs = np.argsort(self.theta)
@@ -271,7 +271,7 @@ class annulus(object):
             p0 = self._optimize_p0_GP(p0, N=int(optimize), resample=resample,
                                       **optimize_kwargs)
 
-        # Run the sampler
+        # Run the sampler.
 
         nsteps = np.atleast_1d(nsteps)
         nburnin = np.atleast_1d(nburnin)

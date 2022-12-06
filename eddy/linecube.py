@@ -274,7 +274,7 @@ class linecube(datacube):
             profiles = profiles.T
             uncertainties = uncertainties.T
 
-        # Deproject the velocity profiles.
+        # Deproject the velocity profiles to account for the inclination.
 
         if deproject:
             profiles /= np.sin(np.radians(abs(inc)))
