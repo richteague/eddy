@@ -17,10 +17,13 @@ class linecube(datacube):
         FOV (Optional[float]): If specified, clip the data down to a
             square field of view with sides of `FOV` [arcsec].
         fill (Optional[float/None]): Value to fill any NaN values.
+        velocity_range (Optional[list]): A velocity range in [m/s] to
+            clip the data down to: ``[min_velo, max_velo]``.
     """
 
-    def __init__(self, path, FOV=None, fill=0.0):
-        datacube.__init__(self, path=path, FOV=FOV, fill=fill)
+    def __init__(self, path, FOV=None, fill=0.0, velocity_range=None):
+        datacube.__init__(self, path=path, FOV=FOV, fill=fill,
+                          velocity_range=velocity_range)
 
     # -- ROTATION PROFILE FUNCTIONS -- #
 
