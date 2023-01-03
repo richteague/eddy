@@ -26,7 +26,8 @@ class annulus(object):
     """
     A class containing an annulus of spectra with their associated polar angles
     measured east of north from the redshifted major axis. These range from -pi
-    to +pi.
+    to +pi. It will also store the rotation direction of the disk, with
+    clockwise rotation meaning a west of north rotation.
 
     Args:
         spectra (ndarray): Array of shape ``[N, M]`` of spectra to shift and

@@ -29,8 +29,8 @@ class linecube(datacube):
 
     def get_velocity_profile(self, rbins=None, fit_method='GP', fit_vrad=False,
                              x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0,
-                             psi=1.0, r_cavity=None, r_taper=None,
-                             q_taper=None, w_i=None, w_r=None, w_t=None,
+                             psi=1.0, r_cavity=0.0, r_taper=np.inf,
+                             q_taper=1.0, w_i=None, w_r=None, w_t=None,
                              z_func=None, shadowed=False, phi_min=None,
                              phi_max=None, exclude_phi=False, abs_phi=False,
                              mask_frame='disk', user_mask=None,
