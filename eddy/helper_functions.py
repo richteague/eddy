@@ -181,7 +181,7 @@ def fit_double_gaussian_fixeddV(x, y, dy=None, return_uncertainty=None):
 
     # Initial single Gaussian fit.
 
-    popt_a, cvar_a = fit_gaussian(x=x, y=y, dy=dy, return_uncertainty=True)
+    popt_a, _ = fit_gaussian(x=x, y=y, dy=dy, return_uncertainty=True)
     if not all(np.isfinite(popt_a)):
         return (popt, cvar) if return_uncertainty else popt
 
@@ -386,19 +386,19 @@ def double_gaussian_max_fixeddV(x, x0, dV, Tb0, x1, Tb1):
                    gaussian(x, x1, dV, Tb1)], axis=0)
 
 
-def SHO(x, A, y0):
+def SHO(x, A, C):
     """Simple harmonic oscillator."""
-    return A * np.cos(x) + y0
+    return A * np.cos(x) + C
 
 
-def SHO_offset(x, A, y0, dx):
+def SHO_offset(x, A, B, C):
     """Simple harmonic oscillator with offset."""
-    return A * np.cos(x + dx) + y0
+    return A * np.cos(x + B) + C
 
 
-def SHO_double(x, A, B, y0):
+def SHO_double(x, A, B, C):
     """Two orthogonal simple harmonic oscillators."""
-    return A * np.cos(x) + B * np.sin(x) + y0
+    return A * np.cos(x) + B * np.sin(x) + C
 
 
 # -- PLOTTING FUNCTIONS -- #
