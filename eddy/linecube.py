@@ -353,8 +353,7 @@ class linecube(datacube):
         # Return the annulus instance.
 
         annulus_kwargs = {} if annulus_kwargs is None else annulus_kwargs
-        return annulus(spectra=dvals, pvals=pvals, velax=self.velax,
-                       rotation='clockwise' if inc >= 0.0 else 'anticlockwise',
+        return annulus(spectra=dvals, pvals=pvals, velax=self.velax, inc=inc,
                        **annulus_kwargs)
 
     def _independent_samples(self, beam_spacing, rvals, pvals, dvals):
