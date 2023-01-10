@@ -1837,6 +1837,38 @@ class rotationmap(datacube):
         if return_fig:
             return fig
 
+    def plot_model_surface_2D(self, samples, params, draws=50, return_fig=True):
+        """
+        Plot the model surface in the (r, z) plane.
+
+        Args:
+            samples (ndarray): An array of samples returned from ``fit_map``.
+            params (dict): The parameter dictionary passed to ``fit_map``.
+            drawns (Optional[int]): Number of draws from the posterior to plot.
+            return_fig (Optional[bool]): Return the figure.
+
+        Returns:
+            fig (Matplotlib figure): If ``return_fig`` is ``True``. Can access
+                the axes through ``fig.axes`` for additional plotting.
+        """
+
+        r, _, z = self.evaluate_models(samples=samples,
+                                       params=params,
+                                       draws=draws,
+                                       coords_only=True,
+                                       )
+        rvals, rbins = self._get_radial_bins()
+        ridxs = np.digitize(rbins, r)
+        zvals = np.array(np.mean(z[ridxs == r]) for r in ridxs])
+
+        fig, ax = plt.subplots()
+        ax.plot(rvals, zvals)
+        ax.set_xlabel('Radius (arcsec')
+        ax.set_ylabel('Height (arcsec)')
+
+        if return_fig:
+            return fig
+
     def plot_disk_axes(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, major=1.0,
                        ax=None, plot_kwargs=None, return_ax=True):
         """
