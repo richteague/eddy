@@ -1859,7 +1859,7 @@ class rotationmap(datacube):
                                        )
         rvals, rbins = self._get_radial_bins()
         ridxs = np.digitize(rbins, r)
-        zvals = np.array(np.mean(z[ridxs == r]) for r in ridxs])
+        zvals = np.array([np.mean(z[ridxs == r]) for r in ridxs])
 
         fig, ax = plt.subplots()
         ax.plot(rvals, zvals)
