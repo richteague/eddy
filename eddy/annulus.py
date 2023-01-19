@@ -574,13 +574,21 @@ class annulus(object):
         width of the shifted-and-stacked azimuthally averaged spectrum.
 
         Args:
-            Coming Soon.
+            p0 (optional[list]): Starting positions for the optimization.
+            fit_vrad (optional[bool]): Whether to include the radial velocity
+                in the fit. Default is ``False``.
+            resample (optional[bool]): Resample the shifted spectra by this
+                factor. For example, resample = 2 will shift and bin the
+                spectrum down to sampling rate twice that of the original data.
+            optimize_kwargs (optional[dict]): Kwargs to pass to ``minimize``.
 
         Returns:
-            Coming Soon.
+            Velocities which minimize the line width of the shifted and stacked
+            spectrum.
         """
 
         # Starting positions.
+
         if p0 is None:
             p0 = self.guess_parameters(fit=True)[:2]
             if not fit_vrad:
@@ -588,6 +596,7 @@ class annulus(object):
         p0 = np.atleast_1d(p0)
 
         # Populate the kwargs.
+
         optimize_kwargs = {} if optimize_kwargs is None else optimize_kwargs
         optimize_kwargs['method'] = optimize_kwargs.get('method', 'Nelder-Mead')
         options = optimize_kwargs.pop('options', {})
@@ -597,7 +606,9 @@ class annulus(object):
         optimize_kwargs['options'] = options
 
         # Run the minimization.
-        res = minimize(self.deprojected_width, x0=p0,
+
+        res = minimize(self.deprojected_width,
+                       x0=p0,
                        args=(fit_vrad, resample),
                        **optimize_kwargs)
         if not res.success:
@@ -620,7 +631,10 @@ class annulus(object):
         """
         from .helper_functions import get_gaussian_width
         vrot, vrad = theta if fit_vrad else (theta, 0.0)
-        x, y = self.deprojected_spectrum(vrot, vrad, resample, scatter=False)
+        x, y = self.deprojected_spectrum(vrot=vrot,
+                                         vrad=vrad,
+                                         resample=resample,
+                                         scatter=False)
         return get_gaussian_width(*self._get_masked_spectrum(x, y))
 
     # -- Rotation Velocity by Fitting a SHO -- #
@@ -734,7 +748,7 @@ class annulus(object):
         # Populate the kwargs. For some reason L-BFGS-B doesn't play nicely.
 
         optimize_kwargs = {} if optimize_kwargs is None else optimize_kwargs
-        optimize_kwargs['method'] = optimize_kwargs.get('method', 'Nelder-Mead')
+        optimize_kwargs['method'] = optimize_kwargs.get('method', 'Powell')
         options = optimize_kwargs.pop('options', {})
         options['maxiter'] = options.pop('maxiter', 10000)
         options['maxfun'] = options.pop('maxfun', 10000)
@@ -743,7 +757,8 @@ class annulus(object):
 
         # Run the minimization.
 
-        res = minimize(self.deprojected_nSNR, x0=p0,
+        res = minimize(self.deprojected_nSNR,
+                       x0=p0,
                        args=(fit_vrad, resample, signal),
                        **optimize_kwargs)
         if not res.success:
@@ -779,7 +794,10 @@ class annulus(object):
         """
         from .helper_functions import gaussian, fit_gaussian
         vrot, vrad = theta if fit_vrad else (theta, 0.0)
-        x, y = self.deprojected_spectrum(vrot, vrad, resample, scatter=False)
+        x, y = self.deprojected_spectrum(vrot=vrot,
+                                         vrad=vrad,
+                                         resample=resample,
+                                         scatter=False)
         x0, dx, A = fit_gaussian(x, y)
         noise = np.std(x[(x - x0) / dx > 3.0])  # Check: noise will vary.
         if signal == 'max':
@@ -1076,22 +1094,29 @@ class annulus(object):
         vpeaks, _ = self.line_centroids(method=method)
         vlsr = np.mean(vpeaks)
 
-        vrot = vpeaks[abs(self.theta).argmin()]
-        vrot -= vpeaks[abs(self.theta - np.pi).argmin()]
-        vrot *= 0.5
+        vrot_p = vpeaks[abs(self.theta).argmin()]
+        vrot_p -= vpeaks[abs(self.theta - np.pi).argmin()]
+        vrot_p *= 0.5
 
-        vrad = vpeaks[abs(self.theta - 0.5 * np.pi).argmin()]
-        vrad -= vpeaks[abs(self.theta + 0.5 * np.pi).argmin()]
-        vrad *= 0.5
+        vrad_p = vpeaks[abs(self.theta - 0.5 * np.pi).argmin()]
+        vrad_p -= vpeaks[abs(self.theta + 0.5 * np.pi).argmin()]
+        vrad_p *= -0.5
 
-        if not fit:
-            return vrot, vrad, vlsr
-        try:
-            from .helper_functions import SHO_double
-            return curve_fit(SHO_double, self.theta, vpeaks,
-                             p0=[vrot, vrad, vlsr], maxfev=10000)[0]
-        except Exception:
-            return vrot, vrad, vlsr
+        if fit:
+            try:
+                from .helper_functions import SHO_double
+                vrot_p, vrad_p = curve_fit(f=SHO_double,
+                                           xdata=self.theta,
+                                           ydata=vpeaks,
+                                           p0=[vrot_p, vrad_p, vlsr],
+                                           maxfev=10000)[0][:2]
+            except Exception:
+                print("Fitting failed...")
+
+        vrot = vrot_p / np.sin(abs(self.inc_rad))
+        vrad = -vrad_p / np.sin(self.inc_rad)
+
+        return vrot, vrad, vlsr
 
     # -- River Functions -- #
 
