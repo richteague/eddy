@@ -1019,7 +1019,7 @@ class rotationmap(datacube):
 
         return params
 
-    def evaluate_models(self, samples=None, params=None, draws=0.5,
+    def evaluate_models(self, samples=None, params=None, draws=50,
                         collapse_func=np.mean, coords_only=False,
                         profile_only=False):
         """
