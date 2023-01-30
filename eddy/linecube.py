@@ -180,7 +180,8 @@ class linecube(datacube):
         rpnts = samples[0][0]
         profiles = np.array([s[1] for s in samples])
 
-        # Calculate weights.
+        # Calculate weights, making sure they are finite and not all summing to
+        # zero.
 
         if weighted_average:
             weights = [1.0 / s[2] for s in samples]
@@ -189,6 +190,8 @@ class linecube(datacube):
             weights = np.ones(profiles.shape)
         if np.all(np.sum(weights, axis=0) == 0.0):
             weights = np.ones(profiles.shape)
+        weights = np.where(np.isfinite(weights), weights, 1.0)
+        weights += 1e-10 * np.random.randn(weights.size).reshape(weights.shape)
         M = np.sum(weights != 0.0, axis=0)
 
         # Weighted average.
