@@ -56,8 +56,7 @@ class datacube(object):
 
     def disk_coords(self, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=None, psi=None,
                     r_cavity=0.0, r_taper=None, q_taper=1.0, z_func=None,
-                    outframe='cylindrical', shadowed=False, force_side=None,
-                    **_):
+                    outframe='cylindrical', shadowed=False, **_):
         r"""
         Get the disk coordinates given certain geometrical parameters and an
         emission surface. The emission surface is most simply described as a
@@ -147,9 +146,8 @@ class datacube(object):
             z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
                 To get the far side of the disk, make this number negative.
             psi (Optional[float]): Flaring angle for the emission surface.
-            z1 (Optional[float]): Correction term for ``z0``.
-            phi (Optional[float]): Flaring angle correction term for the
-                emission surface.
+            r_taper (Optional[float]): Radius for tapered emission surface.
+            q_taper (Optional[float]): Exponent for tapered emission surface.
             r_cavity (Optional[float]): Outer radius of a cavity. Within this
                 region the emission surface is taken to be zero.
             w_i (Optional[float]): Warp inclination in [degrees] at the disk
@@ -163,12 +161,6 @@ class datacube(object):
                 coordinates. Either ``'cartesian'`` or ``'cylindrical'``.
             shadowed (Optional[bool]): Whether to use the slower, but more
                 robust method for deprojecting pixel values.
-            force_side (Optional[str]): Force the emission surface to be a
-                particular side, i.e., ``force_side='front'`` will force the
-                ``z_func`` argument to be positive, while ``force_side='back'``
-                will force ``z_func`` to be negative. Setting
-                ``force_side=None`` will allow any limit for the emission
-                height.
 
         Returns:
             array, array, array: Three coordinate arrays with ``(r, phi, z)``,
@@ -372,6 +364,169 @@ class datacube(object):
         r_disk = np.hypot(x_disk, y_disk)
         t_disk = np.arctan2(y_disk, x_disk)
         return x_disk, y_disk, r_disk, t_disk
+    
+    def cartesian_deprojection(self, data, x0=0.0, y0=0.0, inc=0.0, PA=0.0,
+                               z0=None, psi=None, r_taper=None, q_taper=1.0,
+                               r_cavity=0.0, z_func=None, shadowed=False,
+                               grid=None, griddata_kwargs=None):
+        """
+        Deproject the provided array into a face-on cartesian array.
+
+        Args:
+            data (array): Data to be deprojected. Must be the same shape as a
+                channel of the attached data.
+            x0 (Optional[float]): Source right ascension offset [arcsec].
+            y0 (Optional[float]): Source declination offset [arcsec].
+            inc (Optional[float]): Source inclination [degrees]. A positive
+                inclination denotes a disk rotating clockwise on the sky, while
+                a negative inclination represents a counter-clockwise rotation.
+            PA (Optional[float]): Source position angle [degrees]. Measured
+                between north and the red-shifted semi-major axis in an
+                easterly direction.
+            z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
+                To get the far side of the disk, make this number negative.
+            psi (Optional[float]): Flaring angle for the emission surface.
+            r_taper (Optional[float]): Radius for tapered emission surface.
+            q_taper (Optional[float]): Exponent for tapered emission surface.
+            r_cavity (Optional[float]): Outer radius of a cavity. Within this
+                region the emission surface is taken to be zero.
+            z_func (Optional[callable]): A user-defined emission surface
+                function that will return ``z`` in [arcsec] for a given ``r``
+                in [arcsec]. This will override the analytical form.
+            shadowed (Optional[bool]): Whether to use the slower, but more
+                robust method for deprojecting pixel values.
+            grid (Optional[array]): Grid to define the axis of the deprojection.
+            griddata_kwargs (Optional[dict]): Kwargs to pass to
+                ``scipy.interpolate.griddata``. 
+
+        Returns:
+            array, array: The grid onto which the data is interpolated, and the
+                interpolated data.
+        """
+
+        # Use the on-sky positions by default.
+
+        if grid is None:
+            grid = self.yaxis.copy()
+
+        # Get the pixel coordinates.
+
+        xvals, yvals, _ = self.disk_coords(x0=x0,
+                                           y0=y0,
+                                           inc=inc,
+                                           PA=PA,
+                                           z0=z0,
+                                           psi=psi,
+                                           r_taper=r_taper,
+                                           q_taper=q_taper,
+                                           r_cavity=r_cavity,
+                                           z_func=z_func,
+                                           shadowed=shadowed,
+                                           outframe='cartesian')
+        assert data.shape == xvals.shape
+        
+        # Deproject onto a cartesian grid. Set the default interpolation to
+        # 'nearest' but allow for other options.
+        
+        from scipy.interpolate import griddata
+
+        x = xvals.flatten()
+        y = yvals.flatten()
+        z = data.flatten()
+        isfinite = np.isfinite(z)
+        x, y, z = x[isfinite], y[isfinite], z[isfinite]
+
+        griddata_kwargs = {} if griddata_kwargs is None else griddata_kwargs
+        griddata_kwargs['method'] = griddata_kwargs.pop('method', 'nearest')
+
+        gridded = griddata(points=(x, y),
+                           values=z,
+                           xi=(grid[:, None], grid[None, :]),
+                           **griddata_kwargs)
+
+        return grid, gridded
+
+    def polar_deprojection(self, data, x0=0.0, y0=0.0, inc=0.0, PA=0.0,
+                           z0=None, psi=None, r_taper=None, q_taper=1.0,
+                           r_cavity=0.0, z_func=None, shadowed=False,
+                           rgrid=None, tgrid=None, griddata_kwargs=None):
+        """
+        Deproject the data onto 
+
+        Args:
+            data (array): Data to be deprojected. Must be the same shape as a
+                channel of the attached data.
+            x0 (Optional[float]): Source right ascension offset [arcsec].
+            y0 (Optional[float]): Source declination offset [arcsec].
+            inc (Optional[float]): Source inclination [degrees]. A positive
+                inclination denotes a disk rotating clockwise on the sky, while
+                a negative inclination represents a counter-clockwise rotation.
+            PA (Optional[float]): Source position angle [degrees]. Measured
+                between north and the red-shifted semi-major axis in an
+                easterly direction.
+            z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
+                To get the far side of the disk, make this number negative.
+            psi (Optional[float]): Flaring angle for the emission surface.
+            r_taper (Optional[float]): Radius for tapered emission surface.
+            q_taper (Optional[float]): Exponent for tapered emission surface.
+            r_cavity (Optional[float]): Outer radius of a cavity. Within this
+                region the emission surface is taken to be zero.
+            z_func (Optional[callable]): A user-defined emission surface
+                function that will return ``z`` in [arcsec] for a given ``r``
+                in [arcsec]. This will override the analytical form.
+            shadowed (Optional[bool]): Whether to use the slower, but more
+                robust method for deprojecting pixel values.
+            rgrid (Optional[array]): Radial grid in [arcsec].
+            tgrid (Optional[array]): Azimuthal grid in [degrees].
+            griddata_kwargs (Optional[dict]): Kwargs to pass to
+                ``scipy.interpolate.griddata``. 
+
+        Returns:
+            array, array, array: The radial and azimuthal grids onto which the
+                data is interpolated, and the interpolated data.
+        """
+
+        # Set the default grids.
+
+        rgrid = self.xaxis[0] if rgrid is None else rgrid
+        tgrid = np.linspace(-180.0, 180.0, 180) if tgrid is None else tgrid
+
+        # Get the pixel coordinates.
+
+        rvals, tvals, _ = self.disk_coords(x0=x0,
+                                           y0=y0,
+                                           inc=inc,
+                                           PA=PA,
+                                           z0=z0,
+                                           psi=psi,
+                                           r_taper=r_taper,
+                                           q_taper=q_taper,
+                                           r_cavity=r_cavity,
+                                           z_func=z_func,
+                                           shadowed=shadowed,
+                                           outframe='cylindrical')
+        assert data.shape == rvals.shape
+        
+        # Deproject onto a polar grid. Set the default interpolation to
+        # 'nearest' but allow for other options.
+        
+        from scipy.interpolate import griddata
+
+        r = rvals.flatten()
+        t = np.degrees(tvals.flatten())
+        z = data.flatten()
+        isfinite = np.isfinite(z)
+        r, t, z = r[isfinite], t[isfinite], z[isfinite]
+
+        griddata_kwargs = {} if griddata_kwargs is None else griddata_kwargs
+        griddata_kwargs['method'] = griddata_kwargs.pop('method', 'nearest')
+
+        gridded = griddata(points=(r, t),
+                           values=z,
+                           xi=(tgrid[:, None], rgrid[None, :]),
+                           **griddata_kwargs)
+
+        return rgrid, tgrid, gridded
 
     # -- MASKING FUNCTIONS -- #
 

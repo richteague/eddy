@@ -325,9 +325,6 @@ class rotationmap(datacube):
             z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
                 To get the far side of the disk, make this number negative.
             psi (Optional[float]): Flaring angle for the emission surface.
-            z1 (Optional[float]): Correction term for ``z0``.
-            phi (Optional[float]): Flaring angle correction term for the
-                emission surface.
             r_cavity (Optional[float]): Outer radius of a cavity. Within this
                 region the emission surface is taken to be zero.
             w_i (Optional[float]): Warp inclination in [degrees] at the disk

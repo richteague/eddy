@@ -78,9 +78,6 @@ class linecube(datacube):
             z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
                 To get the far side of the disk, make this number negative.
             psi (Optional[float]): Flaring angle for the emission surface.
-            z1 (Optional[float]): Correction term for ``z0``.
-            phi (Optional[float]): Flaring angle correction term for the
-                emission surface.
             r_cavity (Optional[float]): Outer radius of a cavity. Within this
                 region the emission surface is taken to be zero.
             w_i (Optional[float]): Warp inclination in [degrees] at the disk
@@ -184,10 +181,13 @@ class linecube(datacube):
             weights = np.where(np.isfinite(weights), weights, 0.0)
         else:
             weights = np.ones(profiles.shape)
+
         if np.all(np.sum(weights, axis=0) == 0.0):
             weights = np.ones(profiles.shape)
+        
         weights = np.where(np.isfinite(weights), weights, 1.0)
         weights += 1e-10 * np.random.randn(weights.size).reshape(weights.shape)
+        
         M = np.sum(weights != 0.0, axis=0)
 
         # Weighted average.
@@ -200,17 +200,24 @@ class linecube(datacube):
         uncertainty = np.sum(uncertainty, axis=0)
         uncertainty /= (M - 1.0) / M * np.sum(weights, axis=0)
         uncertainty = np.sqrt(uncertainty)
+
         return rpnts, profile, uncertainty
 
     def _velocity_profile(self, rbins=None, fit_method='GP', fit_vrad=False,
-                          x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0,
-                          psi=1.0, r_cavity=0.0, r_taper=np.inf, q_taper=1.0,
-                          w_i=None, w_r=None, w_t=None, z_func=None,
-                          shadowed=False, phi_min=None, phi_max=None,
-                          exclude_phi=False, abs_phi=False, mask_frame='disk',
-                          user_mask=None, beam_spacing=True, deproject=False,
-                          get_vlos_kwargs=None):
-        """Returns the velocity (rotational and radial) profiles."""
+            x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=1.0, r_cavity=0.0, 
+            r_taper=np.inf, q_taper=1.0, w_i=None, w_r=None, w_t=None,
+            z_func=None, shadowed=False, phi_min=None, phi_max=None,
+            exclude_phi=False, abs_phi=False, mask_frame='disk',
+            user_mask=None, beam_spacing=True, get_vlos_kwargs=None):
+        """
+        Returns the velocity (rotational and radial) profiles.
+
+        Args:
+            TBD
+
+        Returns:
+            TBD
+        """
 
         # Define the radial binning.
 
@@ -275,12 +282,6 @@ class linecube(datacube):
         if profiles.shape[0] == rpnts.size:
             profiles = profiles.T
             uncertainties = uncertainties.T
-
-        # Deproject the velocity profiles to account for the inclination.
-
-        if deproject:
-            profiles /= np.sin(np.radians(abs(inc)))
-            uncertainties /= np.sin(np.radians(abs(inc)))
 
         return rpnts, profiles, uncertainties
 
@@ -430,9 +431,6 @@ class linecube(datacube):
             z0 (Optional[float]): Emission height in [arcsec] at a radius of
                 1".
             psi (Optional[float]): Flaring angle of the emission surface.
-            z1 (Optional[float]): Correction to emission height at 1" in
-                [arcsec].
-            phi (Optional[float]): Flaring angle correction term.
             z_func (Optional[function]): A function which provides
                 :math:`z(r)`. Note that no checking will occur to make sure
                 this is a valid function.
