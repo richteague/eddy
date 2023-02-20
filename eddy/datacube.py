@@ -181,10 +181,10 @@ class datacube(object):
 
         # Cycle through the different options for pixel deprojection.
 
-        if z0 is None:
+        if z0 is None and z_func is None:
             r, t = self._get_midplane_polar_coords(x0, y0, inc, PA)
             z = np.zeros(r.shape)
-        elif psi is None:
+        elif psi is None and z_func is None:
             r, t, z = self._get_conical_polar_coords(x0, y0, inc, PA, z0)
         else:
             if z_func is None:
@@ -439,7 +439,7 @@ class datacube(object):
         griddata_kwargs = {} if griddata_kwargs is None else griddata_kwargs
         griddata_kwargs['method'] = griddata_kwargs.pop('method', 'nearest')
 
-        gridded = griddata(points=(x, y),
+        gridded = griddata(points=(y, x),
                            values=z,
                            xi=(grid[:, None], grid[None, :]),
                            **griddata_kwargs)
@@ -488,8 +488,10 @@ class datacube(object):
 
         # Set the default grids.
 
-        rgrid = self.xaxis[0] if rgrid is None else rgrid
-        tgrid = np.linspace(-180.0, 180.0, 180) if tgrid is None else tgrid
+        if rgrid is None:
+            rgrid = np.linspace(0, self.xaxis.max(), 100)
+        if tgrid is None:
+            tgrid = np.linspace(-180.0, 180.0, 180)
 
         # Get the pixel coordinates.
 
@@ -521,7 +523,7 @@ class datacube(object):
         griddata_kwargs = {} if griddata_kwargs is None else griddata_kwargs
         griddata_kwargs['method'] = griddata_kwargs.pop('method', 'nearest')
 
-        gridded = griddata(points=(r, t),
+        gridded = griddata(points=(t, r),
                            values=z,
                            xi=(tgrid[:, None], rgrid[None, :]),
                            **griddata_kwargs)
