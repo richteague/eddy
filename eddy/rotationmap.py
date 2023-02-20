@@ -287,12 +287,11 @@ class rotationmap(datacube):
         return to_return if len(to_return) > 1 else to_return[0]
 
     def fit_annuli(self, rpnts=None, rbins=None, x0=0.0, y0=0.0, inc=0.0,
-                   PA=0.0, z0=0.0, psi=1.0, r_cavity=None, r_taper=None,
-                   q_taper=None, w_i=None, w_r=None, w_t=None, z_func=None,
-                   shadowed=False, phi_min=None, phi_max=None,
-                   exclude_phi=False, abs_phi=False, mask_frame='disk',
-                   user_mask=None, fit_vrot=True, fit_vrad=True,
-                   fix_vlsr=False, plots=None, returns=None,
+                   PA=0.0, z0=0.0, psi=1.0, r_cavity=0.0, r_taper=np.inf,
+                   q_taper=1.0, z_func=None, shadowed=False, phi_min=None,
+                   phi_max=None, exclude_phi=False, abs_phi=False,
+                   mask_frame='disk', user_mask=None, fit_vrot=True,
+                   fit_vrad=True, fix_vlsr=False, plots=None, returns=None,
                    optimize_kwargs=None, MCMC=False):
         r"""
         Splits the map into concentric annuli based on the geometrical
@@ -327,10 +326,6 @@ class rotationmap(datacube):
             psi (Optional[float]): Flaring angle for the emission surface.
             r_cavity (Optional[float]): Outer radius of a cavity. Within this
                 region the emission surface is taken to be zero.
-            w_i (Optional[float]): Warp inclination in [degrees] at the disk
-                center.
-            w_r (Optional[float]): Scale radius of the warp in [arcsec].
-            w_t (Optional[float]): Angle of nodes of the warp in [degrees].
             z_func (Optional[callable]): A user-defined emission surface
                 function that will return ``z`` in [arcsec] for a given ``r``
                 in [arcsec]. This will override the analytical form.
@@ -370,11 +365,17 @@ class rotationmap(datacube):
         # Get the radial binning and deprojected radius and phi values.
 
         rpnts, rbins = self._get_radial_bins(rpnts=rpnts, rbins=rbins)
-        rvals, pvals = self.disk_coords(x0=x0, y0=y0, inc=inc, PA=PA, z0=z0,
-                                        psi=psi, r_cavity=r_cavity,
-                                        r_taper=r_taper, q_taper=q_taper,
-                                        w_i=w_i, w_r=w_r, w_t=w_t,
-                                        z_func=z_func, shadowed=shadowed)[:2]
+        rvals, pvals = self.disk_coords(x0=x0,
+                                        y0=y0,
+                                        inc=inc,
+                                        PA=PA,
+                                        z0=z0,
+                                        psi=psi,
+                                        r_cavity=r_cavity,
+                                        r_taper=r_taper,
+                                        q_taper=q_taper,
+                                        z_func=z_func,
+                                        shadowed=shadowed)[:2]
 
         # Cycle through each annulus to include the fit.
 
@@ -386,13 +387,24 @@ class rotationmap(datacube):
             # to the next annulus.
 
             try:
-                mask = self.get_mask(r_min=r_min, r_max=r_max, phi_min=phi_min,
-                                     phi_max=phi_max, exclude_phi=exclude_phi,
-                                     abs_phi=abs_phi, x0=x0, y0=y0, inc=inc,
-                                     PA=PA, z0=z0, psi=psi, r_cavity=r_cavity,
-                                     r_taper=r_taper, q_taper=q_taper, w_i=w_i,
-                                     w_r=w_r, w_t=w_t, z_func=z_func,
-                                     shadowed=shadowed, mask_frame=mask_frame,
+                mask = self.get_mask(r_min=r_min,
+                                     r_max=r_max,
+                                     phi_min=phi_min,
+                                     phi_max=phi_max,
+                                     exclude_phi=exclude_phi,
+                                     abs_phi=abs_phi,
+                                     x0=x0,
+                                     y0=y0,
+                                     inc=inc,
+                                     PA=PA,
+                                     z0=z0,
+                                     psi=psi,
+                                     r_cavity=r_cavity,
+                                     r_taper=r_taper,
+                                     q_taper=q_taper,
+                                     z_func=z_func,
+                                     shadowed=shadowed,
+                                     mask_frame=mask_frame,
                                      user_mask=user_mask)
             except ValueError:
                 popt = np.ones(nparams) * np.nan
