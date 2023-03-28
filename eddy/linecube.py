@@ -28,9 +28,9 @@ class linecube(datacube):
     # -- ROTATION PROFILE FUNCTIONS -- #
 
     def get_velocity_profile(self, rbins=None, fit_method='GP', fit_vrad=False,
-            x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=1.0, r_cavity=0.0,
-            r_taper=np.inf, q_taper=1.0, w_i=None, w_r=None, w_t=None,
-            z_func=None, shadowed=False, phi_min=None, phi_max=None,
+            fix_vlsr=None, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=1.0,
+            r_cavity=0.0, r_taper=np.inf, q_taper=1.0, w_i=None, w_r=None,
+            w_t=None, z_func=None, shadowed=False, phi_min=None, phi_max=None,
             exclude_phi=False, abs_phi=False, mask_frame='disk', user_mask=None,
             beam_spacing=True, niter=1, get_vlos_kwargs=None,
             weighted_average=True, return_samples=False):
@@ -67,6 +67,9 @@ class linecube(datacube):
             fit_method (Optional[str]): Method used to infer the velocities.
             fit_vrad (Optional[bool]): Whether to include radial velocities in
                 the fit.
+            fix_vlsr (optional[bool]): Fix the systemic velocity to calculate
+                the deprojected vertical velocities. Only available for
+                `fit_method='SHO'`.
             x0 (Optional[float]): Source right ascension offset [arcsec].
             y0 (Optional[float]): Source declination offset [arcsec].
             inc (Optional[float]): Source inclination [degrees]. A positive
@@ -111,6 +114,7 @@ class linecube(datacube):
             return self._velocity_profile(rbins=rbins,
                                           fit_method=fit_method,
                                           fit_vrad=fit_vrad,
+                                          fix_vlsr=fix_vlsr,
                                           x0=x0,
                                           y0=y0,
                                           inc=inc,
@@ -142,6 +146,7 @@ class linecube(datacube):
         samples = [self._velocity_profile(rbins=rbins,
                                           fit_method=fit_method,
                                           fit_vrad=fit_vrad,
+                                          fix_vlsr=fix_vlsr,
                                           x0=x0,
                                           y0=y0,
                                           inc=inc,
@@ -204,9 +209,9 @@ class linecube(datacube):
         return rpnts, profile, uncertainty
 
     def _velocity_profile(self, rbins=None, fit_method='GP', fit_vrad=False,
-            x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=1.0, r_cavity=0.0, 
-            r_taper=np.inf, q_taper=1.0, w_i=None, w_r=None, w_t=None,
-            z_func=None, shadowed=False, phi_min=None, phi_max=None,
+            fix_vlsr=None, x0=0.0, y0=0.0, inc=0.0, PA=0.0, z0=0.0, psi=1.0,
+            r_cavity=0.0,  r_taper=np.inf, q_taper=1.0, w_i=None, w_r=None,
+            w_t=None, z_func=None, shadowed=False, phi_min=None, phi_max=None,
             exclude_phi=False, abs_phi=False, mask_frame='disk',
             user_mask=None, beam_spacing=True, get_vlos_kwargs=None):
         """
@@ -228,7 +233,8 @@ class linecube(datacube):
         # Set up the kwargs for the fitting.
 
         kw = {} if get_vlos_kwargs is None else get_vlos_kwargs
-        kw['fit_vrad'] = kw.pop('fit_vrad', fit_vrad)
+        kw['fit_vrad'] = fit_vrad
+        kw['fix_vlsr'] = fix_vlsr
         kw['fit_method'] = fit_method
 
         # Cycle through the annuli.

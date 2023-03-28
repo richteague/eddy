@@ -290,8 +290,9 @@ class rotationmap(datacube):
                    PA=0.0, z0=0.0, psi=1.0, r_cavity=0.0, r_taper=np.inf,
                    q_taper=1.0, z_func=None, shadowed=False, phi_min=None,
                    phi_max=None, exclude_phi=False, abs_phi=False,
-                   mask_frame='disk', user_mask=None, fit_vrad=True, vlsr=None,
-                   plots=None, returns=None, optimize_kwargs=None, MCMC=False):
+                   mask_frame='disk', user_mask=None, fit_vrad=True,
+                   fix_vlsr=None, plots=None, returns=None,
+                   optimize_kwargs=None, MCMC=False):
         r"""
         Splits the map into concentric annuli based on the geometrical
         parameters, then fits each annnulus with a simple harmonic oscillator
@@ -343,7 +344,7 @@ class rotationmap(datacube):
             user_mask (Optional[ndarray]): A 2D mask to use.
             fit_vrad (Optional[bool]): Whether to include radial velocities in
                     the fit. Default is ``True``.
-            vlsr (Optional[float]): TBD
+            fix_vlsr (Optional[float]): TBD
             plots (Optional[list]): Plots to generate after the fitting. Can be
                 either of ``'model'`` and ``'residual'``. Default is both.
             returns (Optional[list]): List of objects to return. Can be any of
@@ -378,7 +379,6 @@ class rotationmap(datacube):
         # rotation.
 
         velo, dvelo = [], []
-        velo_proj, dvelo_proj = [], []
 
         # Cycle through each annulus to include the fit.
 
@@ -408,9 +408,9 @@ class rotationmap(datacube):
                                      mask_frame=mask_frame,
                                      user_mask=user_mask)
             except ValueError:
-                popt = np.ones(3) * np.nan
-                velo_proj += [popt]
-                dvelo_proj += [popt]
+                popt = [np.nan, np.nan, np.nan, np.nan]
+                velo += [popt]
+                dvelo += [popt]
                 continue
 
             # Extract the finite pixels.
@@ -430,45 +430,46 @@ class rotationmap(datacube):
                 popt, cvar = self._fit_SHO(x=x,
                                            y=y,
                                            dy=dy,
+                                           inc=inc,
                                            fit_vrad=fit_vrad,
+                                           fix_vlsr=fix_vlsr,
                                            MCMC=MCMC,
                                            optimize_kwargs=optimize_kwargs)
             except ValueError:
-                popt = np.ones(3) * np.nan
-                velo_proj += [popt]
-                dvelo_proj += [popt]
+                popt = [np.nan, np.nan, np.nan, np.nan]
+                velo += [popt]
+                dvelo += [popt]
                 continue
 
-            if not fit_vrad:
-                popt = [popt[0], 0.0, popt[1]]
-                cvar = [cvar[0], 0.0, cvar[1]]
+            # Make sure the radial values are always included, even as a dummy.
 
-            velo_proj += [popt]
-            dvelo_proj += [cvar]
+            vrot_fit = popt[0]
+            dvrot_fit = cvar[0]
+            vrad_fit = popt[1] if fit_vrad else 0.0
+            dvrad_fit = cvar[1] if fit_vrad else 0.0
+            valt_fit = 0.0 if fix_vlsr is None else popt[-1]
+            dvalt_fit = 0.0 if fix_vlsr is None else cvar[-1]
+            vlsr_fit = popt[-1] if fix_vlsr is None else fix_vlsr
+            dvlsr_fit = cvar[-1] if fix_vlsr is None else 0.0
 
-        # Combine all the results into [2, rpnts] shaped arrays to deproject.
-        # If `vlsr` isn't provided, guess this as the mean of the offset values.
+            velo += [[vrot_fit, vrad_fit, valt_fit, vlsr_fit]]
+            dvelo += [[dvrot_fit, dvrad_fit, dvalt_fit, dvlsr_fit]]
 
-        velo_proj = np.squeeze(velo_proj)
-        velo_proj = np.atleast_2d(velo_proj).T
-        dvelo_proj = np.squeeze(dvelo_proj)
-        dvelo_proj = np.atleast_2d(dvelo_proj).T
+        # Combine all the results into [4, rpnts] shaped arrays to deproject.
+
+        velo = np.atleast_2d(np.squeeze(velo)).T
+        dvelo = np.atleast_2d(np.squeeze(dvelo)).T
+        assert dvelo.shape == velo.shape
+        assert velo.shape[0] == 4
+
+        # Build the linearly interpolated model noting that the velocities need
+        # to be projected into the sky.
+
+        velo_proj = np.array([velo[0] * abs(np.sin(np.radians(inc))),
+                              velo[1] * -np.sin(np.radians(inc)),
+                              velo[2] * -np.cos(np.radians(inc)),
+                              velo[3]])
         
-        if vlsr is None:
-            vlsr = np.nanmean(velo_proj[2])
-
-        vrot = velo_proj[0] / abs(np.sin(np.radians(inc)))
-        vrad = -velo_proj[1] / np.sin(np.radians(inc))
-        valt = (vlsr - velo_proj[2]) / np.cos(np.radians(inc))
-        velo = np.vstack([vrot, vrad, valt])
-
-        dvrot = dvelo_proj[0] / abs(np.sin(np.radians(inc)))
-        dvrad = dvelo_proj[1] / abs(np.sin(np.radians(inc)))
-        dvalt = dvelo_proj[2] / abs(np.cos(np.radians(inc)))
-        dvelo = np.vstack([dvrot, dvrad, dvalt])
-
-        # Build the linearly interpolated model.
-
         model = self._evaluate_annuli_model(rpnts=rpnts,
                                             velo_proj=velo_proj,
                                             rvals=rvals,
@@ -502,11 +503,12 @@ class rotationmap(datacube):
 
     def _evaluate_annuli_model(self, rpnts, velo_proj, rvals, pvals):
         """
-        Evaluate the annuli models onto a 2D map. Fits must not be deprojected.
+        Evaluate the annuli models onto a 2D map. The velocity profiles must be
+        projected into the plane of the sky.
 
         Args:
             rpnts (array): A size M array of radial positions.
-            velo_proj (array): A [3xM] array containing the inferred velocity
+            velo_proj (array): A [4xM] array containing the inferred velocity
                 coefficients from a double SHO fit.
             rvals (array): A 2D array of on-sky radial positions in [arcsec].
             pvals (array): A 2D array of on-sky polar angle in [radians].
@@ -518,50 +520,62 @@ class rotationmap(datacube):
         from .helper_functions import SHO_double
         A = interp1d(rpnts, velo_proj[0], bounds_error=False)(rvals)
         B = interp1d(rpnts, velo_proj[1], bounds_error=False)(rvals)
-        C = interp1d(rpnts, velo_proj[2], bounds_error=False)(rvals)
+        C = interp1d(rpnts, velo_proj[2] + velo_proj[3], bounds_error=False)(rvals)
         return SHO_double(pvals, A, B, C)
 
-    def _fit_SHO(self, x, y, dy, fit_vrad=True, MCMC=False,
+    def _fit_SHO(self, x, y, dy, inc, fit_vrad=True, fix_vlsr=None, MCMC=False,
                  optimize_kwargs=None):
-        """Fit the points with a simple harmonic oscillator."""
+        """
+        Fit the points with a simple harmonic oscillator. This should be a
+        duplication of `annulus.get_vlos_SHO`.
+        """
 
-        # IGNORE MCMC FOR NOW.
-
-        if MCMC:
+        if MCMC: # IGNORE MCMC FOR NOW.
             raise NotImplementedError()
 
-        # Guess the starting parameters.
+        from .helper_functions import SHO, SHO_double
+        from scipy.optimize import curve_fit
 
-        A = 0.5 * (y.max() - y.min())
-        B = 0.0
-        C = y.mean()
+        # Starting positions. Here we're using projected velocities such that
+        # A = vrot * sin(|i|), B = -vrad * sin(i) and C = vlsr - vz * cos(i).
 
-        # Define the function to fit the data.
+        A, B, C = 0.5 * (y.max() - y.min()), 0.0, y.mean()
+        p0 = [A, C] if not fit_vrad else [A, B, C]
 
+        # Set up curve_fit. TODO: Is there a better fitting routine than this?
+
+        optimize_kwargs = {} if optimize_kwargs is None else optimize_kwargs
+        optimize_kwargs['p0'] = p0
+        optimize_kwargs['sigma'] = dy
+        optimize_kwargs['absolute_sigma'] = True
+        optimize_kwargs['maxfev'] = optimize_kwargs.pop('maxfev', 10000)
+
+        # Run the optimization.
+
+        try:
+            popt, cvar = curve_fit(SHO_double if fit_vrad else SHO,
+                                   x, y, **optimize_kwargs)
+        except TypeError:
+            popt = np.empty(3 if fit_vrad else 2)
+            cvar = popt[:, None] * popt[None, :]
+        cvar = np.diag(cvar)**0.5
+
+        # Convert from projected velocities into disk-frame velocities.
+        # Note that C is only converted to vertical velocities if the systemic
+        # velocity is provided through `fix_vlsr`.
+
+        popt[0] /= abs(np.sin(np.radians(inc)))
+        cvar[0] /= abs(np.sin(np.radians(inc)))
         if fit_vrad:
-            from .helper_functions import SHO_double
-            func = SHO_double
-            p0 = [A, B, C]
-            priors = ['A', 'B', 'C']
-        else:
-            from .helper_functions import SHO
-            func = SHO
-            p0 = [A, C]
-            priors = ['A', 'C']
+            popt[1] /= -np.sin(np.radians(inc))
+            cvar[1] /= abs(np.sin(np.radians(inc)))
+        if fix_vlsr is not None:
+            popt[-1] = (fix_vlsr - popt[-1]) / np.cos(np.radians(inc))
+            cvar[-1] /= np.cos(np.radians(inc))
 
-        # Returns if no values are provided.
+        # Return the optimized, deprojected values.
 
-        if len(y) == 0:
-            popt = np.empty(len(p0))
-            cvar = popt.copy()
-            return popt, cvar
-
-        # Send values to with curve_fit or emcee.
-
-        if MCMC:
-            return self._SHO_MCMC(x, y, dy, func, p0, priors, optimize_kwargs)
-        else:
-            return self._SHO_chi2(x, y, dy, func, p0, optimize_kwargs)
+        return popt, cvar
 
     def _SHO_chi2(self, x, y, dy, func, p0, optimize_kwargs=None):
         """Use scipy.optimize.curve_fit for the fitting."""
@@ -1550,7 +1564,8 @@ class rotationmap(datacube):
 
     def plot_velocity_profiles(self, rpnts, velo, dvelo):
         """
-        Plot the velocity profiles.
+        Plot the velocity profiles. The `velo` array must specify 
+        ``[v_phi, v_r, v_z, v_lsr]`` in that order.
 
         Args:
             rpnts (array): Array of the annulus centers.
@@ -1560,27 +1575,15 @@ class rotationmap(datacube):
                 profiles with the same shape as ``fits``.
         """
 
-        # Unpack the velocity profiles. If parameters are fixed, their
-        # uncertainties are NaNs.
+        # Make the axes.
+
+        fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(6.75, 6.25))
+
+        # Plot the rotational velocities.
 
         v_phi, dv_phi = velo[0], dvelo[0]
         v_phi_ylim = np.nanpercentile(v_phi / 1e3, [2, 98])
 
-        v_rad, dv_rad = velo[1], dvelo[1]
-        mu = np.nanmedian(v_rad)
-        std = np.nanpercentile(v_rad, [16, 84])
-        std = 0.5 * (std[1] - std[0])
-        v_rad_ylim = (mu - 3.0 * std, mu + 3.0 * std)
- 
-        v_alt, dv_alt = velo[2], dvelo[2]
-        mu = np.nanmedian(v_alt)
-        std = np.nanpercentile(v_alt, [16, 84])
-        std = 0.5 * (std[1] - std[0])
-        v_alt_ylim = (mu - 3.0 * std, mu + 3.0 * std)
-
-        # Make the axes.
-
-        fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(6.75, 6.25))
         axs[0].errorbar(rpnts, v_phi / 1e3, dv_phi / 1e3, fmt='-o', ms=3)
         axs[0].set_xlabel(r'Radius (arcsec)', labelpad=8)
         axs[0].xaxis.set_label_position('top')
@@ -1588,14 +1591,42 @@ class rotationmap(datacube):
         axs[0].set_ylabel(r'$v_{\rm \phi}$' + ' (km/s)')
         axs[0].set_ylim(v_phi_ylim)
 
+        # Plot the radial velocities.
+
+        v_rad, dv_rad = velo[1], dvelo[1]
+        std = np.nanpercentile(v_rad, [16, 84])
+        std = 0.5 * (std[1] - std[0])
+        v_rad_ylim = (-3.0 * std, 3.0 * std)
+ 
         axs[1].errorbar(rpnts, v_rad, dv_rad, fmt='-o', ms=3)
         axs[1].set_xticklabels([])
         axs[1].set_ylabel(r'$v_{\rm r}$' + ' (m/s)')
         axs[1].set_ylim(v_rad_ylim)
 
+        # Plot the vertical / systemic velocities. Note the change between the
+        # y-axis label depending of if we're plotting just the vertical velocity
+        # components, or the combined values.
+    
+        if np.mean(velo[2]) == 0.0 and np.std(velo[2]) == 0.0:
+            v_alt, dv_alt = velo[3], dvelo[3]
+            axs[2].set_ylabel(r'$v_{\rm LSR} - v_{\rm z} / \cos(i)$' + ' (m/s)')
+            mu = np.nanmedian(v_alt)
+        elif np.std(velo[3]) == 0.0:
+            v_alt, dv_alt = velo[2], dvelo[2]
+            axs[2].set_ylabel(r'$v_{\rm z}$' + ' (m/s)')
+            label = r'$v_{\rm LSR} = $' + ' {:.0f} m/s'.format(velo[3, 0])
+            axs[2].text(0.975, 0.925, label, ha='right', va='top',
+                        transform=axs[2].transAxes, color='0.5')
+            mu = 0.0
+        else:
+            raise ValueError("Struggling to parse the `velo` arrays.")
+
+        std = np.nanpercentile(v_alt, [16, 84])
+        std = 0.5 * (std[1] - std[0])
+        v_alt_ylim = (mu - 3.0 * std, mu + 3.0 * std)
+
         axs[2].errorbar(rpnts, v_alt, dv_alt, fmt='-o', ms=3)
         axs[2].set_xlabel(r'Radius (arcsec)')
-        axs[2].set_ylabel(r'$v_{\rm z}$' + ' (m/s)')
         axs[2].set_ylim(v_alt_ylim)
 
         for ax in axs:
