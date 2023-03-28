@@ -1201,8 +1201,8 @@ class annulus(object):
         averaged spectrum, by default a Gaussian profile.
 
         Args:
-            vrot (Optional[float]): Projected rotation velocity in [m/s].
-            vrad (Optional[float]): Projected radial velocity in [m/s].
+            vrot (Optional[float]): Rotation velocity in [m/s].
+            vrad (Optional[float]): Radial velocity in [m/s].
             resample (Optional[int/float/bool]): Resampling option. See
                 ``annulus.deprojected_spectrum`` for more details.
             plot_fit (Optional[bool/str]): Whether to overplot a fit to the
