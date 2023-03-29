@@ -187,7 +187,7 @@ class datacube(object):
         return r * np.cos(t), r * np.sin(t), z
 
     def disk_to_sky(self, coords, x0=0.0, y0=0.0, inc=0.0, PA=0.0,
-                    frame='cartesian'):
+                    frame='cylindrical'):
         """
         Project disk-frame coordinates onto the cartesian sky plane.
 
