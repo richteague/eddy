@@ -300,7 +300,7 @@ class rotationmap(datacube):
 
         .. math::
 
-            v(\phi) = v_{\phi} \cos(\phi) \, / \, \sin(|i|) - v_{\rm rad} \sin(\phi) \, / \, \sin(i) + v_{\rm lsr} \cos(i)
+            v_0(\phi) = v_{\phi} \cos(\phi) \sin(|i|) - v_{\rm r} \sin(\phi) \sin(i) - v_{\rm z} \cos(i) + v_{\rm lsr}
 
         where :math:`i` is the inclination of the disk.
 
@@ -1685,6 +1685,10 @@ class rotationmap(datacube):
         axs[1].set_xticklabels([])
         axs[1].set_ylabel(r'$v_{\rm r}$' + ' (m/s)')
         axs[1].set_ylim(v_rad_ylim)
+        axs[1].text(0.975, 0.925, 'away from star', ha='right', va='top',
+                    transform=axs[1].transAxes, color='0.5')
+        axs[1].text(0.975, 0.075, 'towards star', ha='right', va='bottom',
+                    transform=axs[1].transAxes, color='0.5')
 
         # Plot the vertical / systemic velocities. Note the change between the
         # y-axis label depending of if we're plotting just the vertical velocity
@@ -1698,8 +1702,12 @@ class rotationmap(datacube):
             v_alt, dv_alt = velo[2], dvelo[2]
             axs[2].set_ylabel(r'$v_{\rm z}$' + ' (m/s)')
             label = r'$v_{\rm LSR} = $' + ' {:.0f} m/s'.format(velo[3, 0])
-            axs[2].text(0.975, 0.925, label, ha='right', va='top',
+            axs[2].text(0.025, 0.925, label, ha='left', va='top',
                         transform=axs[2].transAxes, color='0.5')
+            axs[2].text(0.975, 0.925, 'away from midplane', ha='right',
+                        va='top', transform=axs[2].transAxes, color='0.5')
+            axs[2].text(0.975, 0.075, 'towards midplane', ha='right',
+                        va='bottom', transform=axs[2].transAxes, color='0.5')
             mu = 0.0
         else:
             raise ValueError("Struggling to parse the `velo` arrays.")
