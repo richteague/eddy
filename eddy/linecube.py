@@ -362,40 +362,6 @@ class linecube(datacube):
         return annulus(spectra=dvals, pvals=pvals, velax=self.velax, inc=inc,
                        **annulus_kwargs)
 
-    def _independent_samples(self, beam_spacing, rvals, pvals, dvals):
-        """Returns spatially independent samples."""
-
-        if not beam_spacing:
-            return rvals, pvals, dvals
-
-        # Order pixels in increasing phi.
-
-        idxs = np.argsort(pvals)
-        dvals, pvals = dvals[idxs], pvals[idxs]
-
-        # Calculate the sampling rate.
-
-        sampling = float(beam_spacing) * self.bmaj
-        sampling /= np.mean(rvals) * np.median(np.diff(pvals))
-        sampling = np.floor(sampling).astype('int')
-
-        # If the sampling rate is above 1, start at a random location in
-        # the array and sample at this rate, otherwise don't sample. This
-        # happens at small radii, for example.
-
-        if sampling > 1:
-            start = np.random.randint(0, pvals.size)
-            rvals = np.concatenate([rvals[start:], rvals[:start]])
-            pvals = np.concatenate([pvals[start:], pvals[:start]])
-            dvals = np.vstack([dvals[start:], dvals[:start]])
-            rvals = rvals[::sampling]
-            pvals = pvals[::sampling]
-            dvals = dvals[::sampling]
-        else:
-            print("Pixels appear to be close to spatially independent.")
-
-        return rvals, pvals, dvals
-
     # -- PLOTTING FUNCTIONS -- #
 
     def plot_mask(self, ax, r_min=None, r_max=None, exclude_r=False,
