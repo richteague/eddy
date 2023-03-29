@@ -87,22 +87,42 @@ class linecube(datacube):
                 center.
             w_r (Optional[float]): Scale radius of the warp in [arcsec].
             w_t (Optional[float]): Angle of nodes of the warp in [degrees].
-            z_func=None,
-            shadowed=False,
-            phi_min=None,
-            phi_max=None,
-            exclude_phi=False,
-            abs_phi=False,
-            mask_frame='disk',
-            user_mask=None,
-            beam_spacing=True,
-            niter=1,
+            z_func (Optional[function]): A function which provides
+                :math:`z(r)`. Note that no checking will occur to make sure
+                this is a valid function.
+            shadowed (Optional[bool]): Whether to use the slower, but more
+                robust, deprojection method for shadowed disks.
+            phi_min (Optional[float]): Minimum polar angle of the segment of
+                the annulus in [deg]. Note this is the polar angle, not the
+                position angle.
+            phi_max (Optional[float]): Maximum polar angle of the segment of
+                the annulus in [deg]. Note this is the polar angle, not the
+                position angle.
+            exclude_phi (Optional[bool]): If ``True``, exclude the provided
+                polar angle range rather than include it.
+            abs_phi (Optional[bool]): If ``True``, take the absolute value of
+                the polar angle such that it runs from 0 [deg] to 180 [deg].
+            mask_frame (Optional[str]): Which frame to specify the mask in,
+                either ``'disk'``, the default, or ``'sky'``.
+            user_mask (Optional[array]): A user-specified mask to include. Must
+                have the same shape as ``self.data``.
+            beam_spacing (int): Sample pixels separated by roughly
+            `beam_spacing * bmaj` in azimuthal distance.
+            niter (Optional[int]): Number of iterations to run.
             get_vlos_kwargs=None,
-            weighted_average=True,
-            return_samples=False
+            weighted_average (Optional[bool]): Whether to combine multiple
+                iterations with a weighted average and standard deviation,
+                ``weighted_average=True``, or the traditional mean and standard
+                deviation, ``weighted_average=False``.
+            return_samples (Optional[bool]): Whether to return the samples
+                instead of combining them.
 
         Returns:
-            TBD
+            samples (array): If ``return_samples=True``. The array of ``niter``
+                samples of the velocity profiles.
+            rvals, profile, uncertainty (array, array, array): If
+                ``return_samples=False``. The arrays of radial locations and
+                combined velocity and uncertainties.
         """
 
         if niter == 0:
@@ -171,10 +191,11 @@ class linecube(datacube):
                                           get_vlos_kwargs=get_vlos_kwargs)
                    for _ in range(niter)]
 
-        # Just return the samples.
+        # Just return the samples if requested.
 
         if return_samples:
             return samples
+        
         rpnts = samples[0][0]
         profiles = np.array([s[1] for s in samples])
 

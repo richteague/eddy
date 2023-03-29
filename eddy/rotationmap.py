@@ -309,8 +309,11 @@ class rotationmap(datacube):
             position angle is likely off by 180 degrees.
 
         Args:
-            rpnts
-            rbins
+            rpnts (Optional[array]): Array of radial position in [arcsec] to
+                center the annuli on. Only ``rpnts`` or ``rbins`` need to be
+                set.
+            rbins (Optional[array]): Array of annuli edges in [arcsec] to use.
+                Only ``rpnts`` or ``rbins`` need to be set.
             x0 (Optional[float]): Source right ascension offset [arcsec].
             y0 (Optional[float]): Source declination offset [arcsec].
             inc (Optional[float]): Source inclination [degrees]. A positive
