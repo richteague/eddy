@@ -521,22 +521,6 @@ class rotationmap(datacube):
                 dvelo += [wstd]
             else:
                 raise ValueError("Unknown `niter` value.")
-
-            '''
-            # Make sure the radial values are always included, even as a dummy.
-
-            vrot_fit = popt[0]
-            dvrot_fit = cvar[0]
-            vrad_fit = popt[1] if fit_vrad else 0.0
-            dvrad_fit = cvar[1] if fit_vrad else 0.0
-            valt_fit = 0.0 if fix_vlsr is None else popt[-1]
-            dvalt_fit = 0.0 if fix_vlsr is None else cvar[-1]
-            vlsr_fit = popt[-1] if fix_vlsr is None else fix_vlsr
-            dvlsr_fit = cvar[-1] if fix_vlsr is None else 0.0
-
-            velo += [[vrot_fit, vrad_fit, valt_fit, vlsr_fit]]
-            dvelo += [[dvrot_fit, dvrad_fit, dvalt_fit, dvlsr_fit]]
-            '''
             
         # Combine all the results into [4, rpnts] shaped arrays to deproject.
 
@@ -544,6 +528,9 @@ class rotationmap(datacube):
         dvelo = np.atleast_2d(np.squeeze(dvelo)).T
         assert dvelo.shape == velo.shape
         assert velo.shape[0] == 4
+
+        velo = np.where(np.isfinite(velo), velo, np.nan)
+        dvelo = np.where(np.isfinite(dvelo), dvelo, np.nan)
 
         # Build the linearly interpolated model noting that the velocities need
         # to be projected into the sky.
@@ -1390,6 +1377,59 @@ class rotationmap(datacube):
         v_z = np.where(zvals >= 0.0, -v_z, v_z)
         return v_p, v_r, v_z
 
+    # -- UTILITIES -- #
+
+    def remove_hot_pixels(self, npix=2, nsigma=1.0, niter=1, replace=True):
+        """
+        Remove hot pixels from the data. Hot pixels are identified by deviating
+        from the mean of the region +\- `npix` by an amount of at least `nsigma` 
+        times the standard deviation of the region. These hot pixels are
+        replaced by interpolated (using a box kernel convolution) values.
+
+        Args:
+            npix (Optional[int]): The number of pixels from the pixel of
+                interest to consider part of the region.
+            nsigma (Optional[float]): The threshold for considering a pixel a
+                'hot' pixel. Smaller values identify more hot pixels.
+            niter (Optional[int]): How many times to repeat this smoothing. Note
+                that with `niter > 1` some features may be washed out.
+            replace (Optional[bool]): If `True`, replace the attached dataset,
+                otherwise, return as an array.
+
+        Returns:
+            corrected_data (array): The correced data if `replace=False`.
+        """
+        from astropy.convolution import convolve, Box2DKernel
+
+        data_tmp = self.data.copy()
+
+        for _ in range(niter):
+        
+            # Cycle through each pixel and identify the hot pixels.
+
+            coldpix = np.ones(data_tmp.shape) * np.nan
+            for xi in np.arange(npix, self.nxpix - npix):
+                for yi in np.arange(npix, self.nypix - npix):
+                    point = data_tmp[yi, xi]
+                    region = data_tmp[yi-npix:yi+npix+1, xi-npix:xi+npix+1]
+                    region_mu = np.nanmean(region)
+                    region_std = np.nanstd(region)
+                    if abs(point - region_mu) < (nsigma * region_std):
+                        coldpix[yi, xi] = point
+                        
+            # Convolve, interpolating the NaN value, and re-mask based on the
+            # old data. 
+            
+            hotpix = np.logical_and(np.isfinite(self.data), np.isnan(coldpix))
+            coldpix = convolve(coldpix, Box2DKernel(2*npix+1))
+            data_tmp = np.where(hotpix, coldpix, data_tmp)
+        
+        # Either replace the attached data or return as an array.
+
+        if not replace:
+            return data_tmp
+        self.data = data_tmp
+
     # -- Functions to help determine the emission height. -- #
 
     def find_maxima(self, x0=0.0, y0=0.0, PA=0.0, vlsr=None, r_max=None,
@@ -1694,11 +1734,11 @@ class rotationmap(datacube):
         # y-axis label depending of if we're plotting just the vertical velocity
         # components, or the combined values.
 
-        if np.mean(velo[2]) == 0.0 and np.std(velo[2]) < 1e-4:
+        if np.nanmean(velo[2]) == 0.0 and np.nanstd(velo[2]) < 1e-4:
             v_alt, dv_alt = velo[3], dvelo[3]
             axs[2].set_ylabel(r'$v_{\rm LSR} - v_{\rm z} / \cos(i)$' + ' (m/s)')
             mu = np.nanmedian(v_alt)
-        elif np.std(velo[3]) < 1e-4:
+        elif np.nanstd(velo[3]) < 1e-4:
             v_alt, dv_alt = velo[2], dvelo[2]
             axs[2].set_ylabel(r'$v_{\rm z}$' + ' (m/s)')
             label = r'$v_{\rm LSR} = $' + ' {:.0f} m/s'.format(velo[3, 0])
