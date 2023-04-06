@@ -1130,6 +1130,21 @@ class datacube(object):
 
         return rvals, pvals, dvals
     
+    def velocity_to_restframe_frequency(self, velax=None, vlsr=0.0):
+        """Return restframe frequency [Hz] of the given velocity [m/s]."""
+        velax = self.velax if velax is None else np.squeeze(velax)
+        return self.nu0 * (1. - (velax - vlsr) / 2.998e8)
+
+    def restframe_frequency_to_velocity(self, nu, vlsr=0.0):
+        """Return velocity [m/s] of the given restframe frequency [Hz]."""
+        return 2.998e8 * (1. - nu / self.nu0) + vlsr
+    
+    def spectral_resolution(self, dV=None):
+        """Convert velocity resolution in [m/s] to [Hz]."""
+        dV = dV if dV is not None else self.chan
+        nu = self.velocity_to_restframe_frequency(velax=[-dV, 0.0, dV])
+        return np.mean([abs(nu[1] - nu[0]), abs(nu[2] - nu[1])])
+    
     # -- PLOTTING FUNCTIONS -- #
 
     @staticmethod
