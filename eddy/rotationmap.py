@@ -815,12 +815,19 @@ class rotationmap(datacube):
         """
         import matplotlib.pyplot as plt
         fig, ax = plt.subplots()
+    
+        if vmin is None or vmax is None:
+            vmin_tmp, vmax_tmp = np.nanpercentile(self.data, [2, 98])
+            vmax_tmp = max(abs(vmin_tmp - self.vlsr), abs(vmax_tmp - self.vlsr))
+            vmin_tmp = (self.vlsr - vmax_tmp) / 1e3
+            vmax_tmp = (self.vlsr + vmax_tmp) / 1e3
+            if vmin is None:
+                vmin = vmin_tmp
+            if vmax is None:
+                vmax = vmax_tmp
 
-        vmin = np.nanpercentile(self.data, [2]) if vmin is None else vmin
-        vmax = np.nanpercentile(self.data, [98]) if vmax is None else vmax
-        vmax = max(abs(vmin - self.vlsr), abs(vmax - self.vlsr))
         im = ax.imshow(self.data / 1e3, origin='lower', extent=self.extent,
-                       vmin=(self.vlsr-vmax)/1e3, vmax=(self.vlsr+vmax)/1e3,
+                       vmin=vmin, vmax=vmax,
                        cmap=rotationmap.cmap(), zorder=-9)
         cb = plt.colorbar(im, pad=0.03, extend='both', format='%.2f')
         cb.minorticks_on()
@@ -1055,31 +1062,7 @@ class rotationmap(datacube):
 
         params['z_func'] = params.pop('z_func', None)
         params['shadowed'] = params.pop('shadowed', False)
-
-        # Masking parameters.
-
-        # params['r_min'] = params.pop('r_min', 0.0)
-        # params['r_max'] = params.pop('r_max', 1e10)
-        # params['exclude_r'] = params.pop('exclude_r', False)
-        # params['phi_min'] = params.pop('phi_min', -180.0)
-        # params['phi_max'] = params.pop('phi_max', 180.0)
-        # params['exclude_phi'] = params.pop('exclude_phi', False)
-        # params['abs_phi'] = params.pop('abs_phi', False)
-        # params['v_min'] = params.pop('v_min', np.nanmin(self.data))
-        # params['v_max'] = params.pop('v_max', np.nanmax(self.data))
-        # params['exclude_v'] = params.pop('exclude_v', False)
         params['user_mask'] = params.pop('user_mask', np.ones(self.data.shape))
-
-        # if params['r_min'] >= params['r_max']:
-        #     raise ValueError("`r_max` must be greater than `r_min`.")
-        # if params['phi_min'] >= params['phi_max']:
-        #     raise ValueError("`phi_max` must be great than `phi_min`.")
-        # if params['v_min'] >= params['v_max']:
-        #     raise ValueError("`v_max` must be greater than `v_min`.")
-
-        # Beam convolution.
-
-        # params['beam'] = bool(params.pop('beam', False))
 
         return params
 
@@ -1429,6 +1412,7 @@ class rotationmap(datacube):
         if not replace:
             return data_tmp
         self.data = data_tmp
+        self.mask = np.isfinite(self.data)
 
     # -- Functions to help determine the emission height. -- #
 
