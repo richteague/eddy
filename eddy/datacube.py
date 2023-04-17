@@ -532,7 +532,7 @@ class datacube(object):
                            r_cavity=0.0, z_func=None, shadowed=False,
                            rgrid=None, tgrid=None, griddata_kwargs=None):
         """
-        Deproject the data onto 
+        Deproject the provided data onto a polar grid.
 
         Args:
             data (array): Data to be deprojected. Must be the same shape as a
@@ -570,9 +570,9 @@ class datacube(object):
         # Set the default grids.
 
         if rgrid is None:
-            rgrid = np.linspace(0, self.xaxis.max(), 100)
+            rgrid = np.arange(0, self.xaxis.max(), self.dpix)
         if tgrid is None:
-            tgrid = np.linspace(-180.0, 180.0, 180)
+            tgrid = np.linspace(-np.pi, np.pi, self.xaxis.size)
 
         # Get the pixel coordinates.
 
@@ -587,14 +587,13 @@ class datacube(object):
                                    r_cavity=r_cavity,
                                    z_func=z_func,
                                    shadowed=shadowed,
-                                   outframe='cylindrical',
-                                   flatten=True)
+                                   outframe='cylindrical')
         
         # Deproject onto a polar grid.
         
-        gridded = datacube._griddata(points=(np.degrees(t), r),
+        gridded = datacube._griddata(points=(r.flatten(), t.flatten()),
                                      values=data.flatten(),
-                                     xi=(tgrid[:, None], rgrid[None, :]),
+                                     xi=(rgrid[None, :], tgrid[:, None]),
                                      griddata_kwargs=griddata_kwargs)
 
         return rgrid, tgrid, gridded
