@@ -8,7 +8,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name="astro-eddy",
-    version="2.3.7",
+    version="2.3.9",
     author="Richard Teague",
     author_email="rteague@mit.edu",
     description=("Tools to study the dynamics of protoplanetary disks."),
@@ -24,6 +24,7 @@ setup(
         "emcee>=3",
         "corner>=2",
         "zeus-mcmc",
+        "bettermoments",
         ],
     package_data={'eddy': ['*.yml']},
     include_package_data=True,

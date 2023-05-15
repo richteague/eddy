@@ -33,7 +33,7 @@ class linecube(datacube):
             w_t=None, z_func=None, shadowed=False, phi_min=None, phi_max=None,
             exclude_phi=False, abs_phi=False, mask_frame='disk', user_mask=None,
             beam_spacing=True, niter=1, get_vlos_kwargs=None,
-            weighted_average=True, return_samples=False):
+            weighted_average=True, return_samples=False, repeat_with_mask=0):
         """
         Returns the rotational and, optionally, radial velocity profiles under
         the assumption that the disk is azimuthally symmetric (at least across
@@ -116,6 +116,7 @@ class linecube(datacube):
                 deviation, ``weighted_average=False``.
             return_samples (Optional[bool]): Whether to return the samples
                 instead of combining them.
+            repeat_with_mask (Optional[int]):
 
         Returns:
             samples (array): If ``return_samples=True``. The array of ``niter``
@@ -156,7 +157,8 @@ class linecube(datacube):
                                           mask_frame=mask_frame,
                                           user_mask=user_mask,
                                           beam_spacing=beam_spacing,
-                                          get_vlos_kwargs=get_vlos_kwargs)
+                                          get_vlos_kwargs=get_vlos_kwargs,
+                                          repeat_with_mask=repeat_with_mask)
 
         # Multiple iterations.
 
@@ -188,7 +190,8 @@ class linecube(datacube):
                                           mask_frame=mask_frame,
                                           user_mask=user_mask,
                                           beam_spacing=beam_spacing,
-                                          get_vlos_kwargs=get_vlos_kwargs)
+                                          get_vlos_kwargs=get_vlos_kwargs,
+                                          repeat_with_mask=repeat_with_mask)
                    for _ in range(niter)]
 
         # Just return the samples if requested.
@@ -234,7 +237,8 @@ class linecube(datacube):
             r_cavity=0.0,  r_taper=np.inf, q_taper=1.0, w_i=None, w_r=None,
             w_t=None, z_func=None, shadowed=False, phi_min=None, phi_max=None,
             exclude_phi=False, abs_phi=False, mask_frame='disk',
-            user_mask=None, beam_spacing=True, get_vlos_kwargs=None):
+            user_mask=None, beam_spacing=True, get_vlos_kwargs=None,
+            repeat_with_mask=0):
         """
         Returns the velocity (rotational and radial) profiles.
 
@@ -257,6 +261,7 @@ class linecube(datacube):
         kw['fit_vrad'] = fit_vrad
         kw['fix_vlsr'] = fix_vlsr
         kw['fit_method'] = fit_method
+        kw['repeat_with_mask'] = repeat_with_mask
 
         # Cycle through the annuli.
 
@@ -465,6 +470,8 @@ class linecube(datacube):
 
         ax.contourf(self.xaxis, self.yaxis, mask, [-.5, .5], **contourf_kwargs)
         ax.contour(self.xaxis, self.yaxis, mask, 1, **contour_kwargs)
+
+    # -- UTILITIES -- #
 
     def get_spectrum(self, coords, x0=0.0, y0=0.0, inc=0.0, PA=0.0,
                      z0=0.0, psi=1.0, z_func=None, frame='sky',
