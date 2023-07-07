@@ -39,25 +39,35 @@ class annulus(object):
         velax (ndarray): Velocity axis in [m/s] of the spectra.
         inc (float): Inclination of the disk in [deg]. A positive inclination
             specifies a clockwise rotating disk.
+        rvals (ndarray): Radial position in [arcsec] of each pixel.
+        xsky (ndarray): On-sky x-offset in [arcsec] of each pixel.
+        ysky (ndarray): On-sky y-offset in [arcsec] of each pixel.
+        jidx (ndarray): j-index of the original data array (y-axis).
+        iidx (ndarray): i-index of the original data array (x-axis).
         remove_empty (optional[bool]): Remove empty spectra.
         sort_spectra (optional[bool]): Sorted the spectra into increasing
             ``theta``.
     """
 
-    def __init__(self, spectra, pvals, velax, inc,
-                 remove_empty=True, sort_spectra=True):
+    def __init__(self, spectra, pvals, velax, inc, rvals, xsky, ysky, jidx,
+                 iidx, remove_empty=True, sort_spectra=True):
 
-        # Read in the spectra and estimate the RMS.
+        # Read in the spectra and populate variables.
 
         self.theta = pvals
+        self.rvals = rvals
+        self.xsky = xsky
+        self.ysky = ysky
+        self.jidx = jidx
+        self.iidx = iidx
         self.spectra = spectra
-        self.inc = inc
-        if self.inc == 0.0:
+        if inc == 0.0:
             raise ValueError("Disk inclination must be non-zero.")
-        self.inc_rad = np.radians(self.inc)
-        self.sini = np.sin(self.inc_rad)
-        self.cosi = np.cos(self.inc_rad)
-        self.rotation = 'clockwise' if self.inc > 0 else 'anticlockwise'
+        else:
+            self.inc = inc
+
+        # Estimate the RMS.
+
         self.rms = self._estimate_RMS()
 
         # Sort the spectra with increasing polar angle.
@@ -66,6 +76,11 @@ class annulus(object):
             idxs = np.argsort(self.theta)
             self.spectra = self.spectra[idxs]
             self.theta = self.theta[idxs]
+            self.rvals = self.rvals[idxs]
+            self.xsky = self.xsky[idxs]
+            self.ysky = self.ysky[idxs]
+            self.jidx = self.jidx[idxs]
+            self.iidx = self.iidx[idxs]
 
         # Remove empty pixels.
 
@@ -75,6 +90,11 @@ class annulus(object):
             idxs = idxa & idxb
             self.theta = self.theta[idxs]
             self.spectra = self.spectra[idxs]
+            self.rvals = self.rvals[idxs]
+            self.xsky = self.xsky[idxs]
+            self.ysky = self.ysky[idxs]
+            self.jidx = self.jidx[idxs]
+            self.iidx = self.iidx[idxs]
         if self.theta.size < 1:
             raise ValueError("No finite spectra. Check for NaNs.")
 
@@ -82,6 +102,10 @@ class annulus(object):
 
         self.theta_deg = np.degrees(self.theta)
         self.spectra_flat = self.spectra.flatten()
+        self.inc_rad = np.radians(self.inc)
+        self.sini = np.sin(self.inc_rad)
+        self.cosi = np.cos(self.inc_rad)
+        self.rotation = 'clockwise' if self.inc > 0 else 'anticlockwise'
 
         # Velocity axis.
 
@@ -1165,7 +1189,7 @@ class annulus(object):
         if dv_mask is None:
             dv_mask = 2.0 * self.chan
         if dv_mask < self.chan:
-            raise ValueError("`dv` must be at least twice the channel spacing.")
+            raise ValueError("`dv_mask` must be at least the channel spacing.")
         mask = self.calc_vlos(vrot=vrot_mask,
                               vrad=vrad_mask,
                               vlsr=vlsr_mask)
@@ -1543,8 +1567,8 @@ class annulus(object):
             vlsr_mask (Optional[float]):
             vrad_mask (Optional[float]):
             dv_mask (Optional[float]):
-            xlims (Optional[list]): Minimum and maximum x-range for the figure.
-            ylims (Optional[list]): Minimum and maximum y-range for the figure.
+            mJy (Optional[float]): Whether to plot in units of mJy/beam or
+                Jy/beam. Default is mJy/beam.
             tgrid (Optional[ndarray]): Theta grid in [rad] used for gridding
                 the data. By default this spans ``-pi`` to ``pi``.
             return_fig (Optional[bool]): Whether to return the figure axes.
@@ -1572,7 +1596,6 @@ class annulus(object):
         mean_spectrum = np.nanmean(spectra, axis=0)
         if residual:
             spectra -= mean_spectrum
-            spectra *= 1e3
 
         # Estimate the RMS. Here we try an iterative clip but if this seems to
         # remove all the points we revert to a standard deviation.
@@ -1658,9 +1681,11 @@ class annulus(object):
         cb_ax = ax_divider.append_axes('right', size='2%', pad='1%')
         cb = plt.colorbar(im, cax=cb_ax)
         if residual:
-            cb.set_label('Residual (mJy/beam)', rotation=270, labelpad=13)
+            cb.set_label('Residual (mJy/beam)',
+                         rotation=270, labelpad=13)
         else:
-            cb.set_label('Intensity (Jy/beam)', rotation=270, labelpad=13)
+            cb.set_label('Intensity (Jy/beam)',
+                         rotation=270, labelpad=13)
 
         if return_fig:
             return fig

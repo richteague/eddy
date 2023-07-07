@@ -320,13 +320,40 @@ class linecube(datacube):
     # -- ANNULUS FUNCTIONS -- #
 
     def get_annulus(self, r_min, r_max, phi_min=None, phi_max=None,
-                    exclude_phi=False, abs_phi=False, x0=0.0, y0=0.0, inc=0.0,
-                    PA=0.0, z0=0.0, psi=1.0, r_cavity=0.0, r_taper=np.inf,
-                    q_taper=1.0, w_i=None, w_r=None, w_t=None, z_func=None,
-                    shadowed=False, mask_frame='disk', user_mask=None,
-                    beam_spacing=True, annulus_kwargs=None):
+            exclude_phi=False, abs_phi=False, x0=0.0, y0=0.0, inc=0.0, PA=0.0,
+            z0=0.0, psi=1.0, r_cavity=0.0, r_taper=np.inf, q_taper=1.0,
+            w_i=None, w_r=None, w_t=None, z_func=None, shadowed=False,
+            mask_frame='disk', user_mask=None, beam_spacing=True,
+            annulus_kwargs=None):
         """
         Returns an annulus instance.
+
+        Args:
+            r_min
+            r_max
+            phi_min
+            phi_max
+            exclude_phi
+            abs_phi
+            x0 (Optional[float]): Source right ascension offset [arcsec].
+            y0 (Optional[float]): Source declination offset [arcsec].
+            inc (Optional[float]): Source inclination [degrees]. A positive
+                inclination denotes a disk rotating clockwise on the sky, while
+                a negative inclination represents a counter-clockwise rotation.
+            PA (Optional[float]): Source position angle [degrees]. Measured
+                between north and the red-shifted semi-major axis in an
+                easterly direction.
+            z0 (Optional[float]): Aspect ratio at 1" for the emission surface.
+                To get the far side of the disk, make this number negative.
+            psi (Optional[float]): Flaring angle for the emission surface.
+            r_cavity (Optional[float]): Outer radius of a cavity. Within this
+                region the emission surface is taken to be zero.
+            r_taper (Optional[float]): Radius for tapered emission surface.
+            q_taper (Optional[float]): Exponent for tapered emission surface.
+            w_i: [coming soon]
+            w_r: [coming soon]
+            w_t: [coming soon]
+
         """
 
         # Calculate and flatten the mask.
@@ -358,8 +385,12 @@ class linecube(datacube):
         mask = mask.flatten()
 
         # Flatten the data and get the deprojected pixel coordinates.
+        # We will record the on-sky pixels, their deprojected disk-frame polar
+        # coordinates and the array indices.
 
         dvals = self.data.copy().reshape(self.data.shape[0], -1)
+        dvals = dvals[:, mask].T
+
         rvals, pvals = self.disk_coords(x0=x0,
                                         y0=y0,
                                         inc=inc,
@@ -373,19 +404,38 @@ class linecube(datacube):
                                         w_r=w_r,
                                         w_t=w_t,
                                         z_func=z_func,
-                                        shadowed=shadowed)[:2]
-        rvals, pvals = rvals.flatten(), pvals.flatten()
-        dvals, rvals, pvals = dvals[:, mask].T, rvals[mask], pvals[mask]
+                                        shadowed=shadowed,
+                                        flatten=True)[:2]
+        rvals, pvals = rvals[mask], pvals[mask]
+
+        xsky, ysky = self.disk_coords(x0=0.0,
+                                      y0=0.0,
+                                      inc=0.0,
+                                      PA=0.0,
+                                      outframe='cartesian',
+                                      flatten=True)[:2]
+        xsky, ysky = xsky[mask], ysky[mask]
+        
+        iidx, jidx = np.meshgrid(np.arange(self.nypix), np.arange(self.nxpix))
+        iidx, jidx = iidx.flatten()[mask], jidx.flatten()[mask]
 
         # Thin down to spatially independent pixels.
 
-        rvals, pvals, dvals = self._independent_samples(beam_spacing,
-                                                        rvals, pvals, dvals)
+        thinned = self._independent_samples(beam_spacing=beam_spacing,
+                                            rvals=rvals,
+                                            pvals=pvals,
+                                            dvals=dvals,
+                                            xsky=xsky,
+                                            ysky=ysky,
+                                            jidx=jidx,
+                                            iidx=iidx)
+        rvals, pvals, dvals, xsky, ysky, jidx, iidx = thinned
 
         # Return the annulus instance.
 
         annulus_kwargs = {} if annulus_kwargs is None else annulus_kwargs
         return annulus(spectra=dvals, pvals=pvals, velax=self.velax, inc=inc,
+                       rvals=rvals, xsky=xsky, ysky=ysky, jidx=jidx, iidx=iidx,
                        **annulus_kwargs)
 
     # -- PLOTTING FUNCTIONS -- #

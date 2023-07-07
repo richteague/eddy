@@ -1086,16 +1086,21 @@ class datacube(object):
         uncertainty = np.sqrt(nbeams) * self.estimate_cube_RMS()
         return spectrum, uncertainty
 
-    def _independent_samples(self, beam_spacing, rvals, pvals, dvals):
+    def _independent_samples(self, beam_spacing, rvals, pvals, dvals, xsky,
+            ysky, jidx, iidx):
         """
         Returns spatially independent samples.
 
         Args:
             beam_spacing (int): Sample pixels separated by roughly
             `beam_spacing * bmaj` in azimuthal distance.
-            rvals (array): Array of radial values in [arcsec].
-            pvals (array): Array of polar angles in [radians].
-            dvals (array): Array of data values.
+            rvals (ndarray): Array of radial values in [arcsec].
+            pvals (ndarray): Array of polar angles in [radians].
+            dvals (ndarray): Array of data values.
+            xsky (ndarray): On-sky x-offset in [arcsec] of each pixel.
+            ysky (ndarray): On-sky y-offset in [arcsec] of each pixel.
+            jidx (ndarray): j-index of the original data array (y-axis).
+            iidx (ndarray): i-index of the original data array (x-axis).
 
         Returns:
             rvals, pvals, dvals (array, array, array): A subsample of the   
@@ -1103,12 +1108,18 @@ class datacube(object):
         """
 
         if not beam_spacing:
-            return rvals, pvals, dvals
+            return rvals, pvals, dvals, xsky, ysky, jidx, iidx
 
-        # Order pixels in increasing phi.
+        # Order pixels and arrays in increasing phi.
 
         idxs = np.argsort(pvals)
-        dvals, pvals = dvals[idxs], pvals[idxs]
+        dvals = dvals[idxs]
+        pvals = pvals[idxs]
+        rvals = rvals[idxs]
+        xsky = xsky[idxs]
+        ysky = ysky[idxs]
+        jidx = jidx[idxs]
+        iidx = iidx[idxs]
 
         # Calculate the sampling rate.
 
@@ -1122,16 +1133,24 @@ class datacube(object):
 
         if sampling > 1:
             start = np.random.randint(0, pvals.size)
-            rvals = np.concatenate([rvals[start:], rvals[:start]])
-            pvals = np.concatenate([pvals[start:], pvals[:start]])
             dvals = np.vstack([dvals[start:], dvals[:start]])
-            rvals = rvals[::sampling]
-            pvals = pvals[::sampling]
+            pvals = np.concatenate([pvals[start:], pvals[:start]])
+            rvals = np.concatenate([rvals[start:], rvals[:start]])
+            xsky = np.concatenate([xsky[start:], xsky[:start]])
+            ysky = np.concatenate([ysky[start:], ysky[:start]])
+            jidx = np.concatenate([jidx[start:], jidx[:start]])
+            iidx = np.concatenate([iidx[start:], iidx[:start]])
             dvals = dvals[::sampling]
+            pvals = pvals[::sampling]
+            rvals = rvals[::sampling]
+            xsky = xsky[::sampling]
+            ysky = ysky[::sampling]
+            jidx = jidx[::sampling]
+            iidx = iidx[::sampling]
         else:
             print("Pixels appear to be close to spatially independent.")
 
-        return rvals, pvals, dvals
+        return rvals, pvals, dvals, xsky, ysky, jidx, iidx
     
     def velocity_to_restframe_frequency(self, velax=None, vlsr=0.0):
         """Return restframe frequency [Hz] of the given velocity [m/s]."""
