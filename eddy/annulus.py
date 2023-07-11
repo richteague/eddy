@@ -163,6 +163,13 @@ class annulus(object):
         general it is recommended that ``resample=False`` for the Gaussian
         Process approach, while ``resample=True`` for the other two.
 
+        TWo arrays will be returned: ``v`` and ``dv`` which are the velocity
+        profiles and uncertainties, respectively. Both ``v`` and ``dv``
+        will have a size of 3, representing the three velocity components, 
+        ``v_phi``, ``v_r`` and ``v_z``. As not all methods return the same
+        components, those that are unable to be calculated will be populated
+        with ``NaN``s.
+
         Args:
             p0 (optional[list]): Starting positions for the minimization. If
                 nothing is provided these will be guessed but this may not
@@ -173,10 +180,13 @@ class annulus(object):
             fix_vlsr (optional[bool]): Fix the systemic velocity to calculate
                 the deprojected vertical velocities. Only available for
                 `fit_method='SHO'`.
-            vrot_mask (optional[float]):
-            vlsr_mask (optional[float]):
-            vrad_mask (optional[float]):
-            dv_mask (optional[float]):
+            vrot_mask (optional[float]): A rotational velocity to adopt for a
+                mask in [m/s].
+            vlsr_mask (optional[float]): A systemic velocity to adopt for a mask
+                in [m/s].
+            vrad_mask (optional[float]): A radial velocity to adopt for a mask
+                in [m/s].
+            dv_mask (optional[float]): Width of the mask in [m/s].
             resample (optional[bool]): Resampling method to apply. See
                 :func:`deprojected_spectrum` for more details.
             optimize (optional[bool]): Optimize the starting positions before
@@ -187,7 +197,9 @@ class annulus(object):
             nsteps (optional[int]): Number of steps taken to sample posteriors.
             scatter (optional[float]): Scatter applied to the starting
                 positions before running the MCMC.
-            signal (optional[str]):
+            signal (optional[str]): The type of signal to use for the ``'SNR'``
+                fit method, either the integral of the line, ``'int'``, the
+                default, or the peak of the line, ``'max'``.
             optimize_kwargs (optional[dict]):
             mcmc (optional[str]):
             mcmc_kwargs (optional[dict]):
@@ -199,9 +211,7 @@ class annulus(object):
                 Currently only works with `fit_method='SHO'`.
 
         Returns:
-            Either the samples of the posterior for each free parameter, or the
-            16th, 50th and 84th pecentiles of the distributions depending on
-            what ``returns`` was set to.
+            v, dv (array, array): [coming soon]
 
         .. _Teague et al. (2018a): https://ui.adsabs.harvard.edu/abs/2018ApJ...860L..12T/abstract
         .. _Teague et al. (2018b): https://ui.adsabs.harvard.edu/abs/2018ApJ...868..113T/abstract
@@ -237,9 +247,14 @@ class annulus(object):
                                     mcmc=mcmc,
                                     optimize_kwargs=optimize_kwargs,
                                     mcmc_kwargs=mcmc_kwargs)
+
             cvar = 0.5 * (popt[:, 2] - popt[:, 0])
-            popt = popt[:2, 1] if fit_vrad else popt[:1, 1]
-            cvar = cvar[:2] if fit_vrad else cvar[:1]
+            popt = np.array([popt[0, 1],
+                             popt[1, 1] if fit_vrad else np.nan,
+                             np.nan])
+            cvar = np.array([cvar[0],
+                             cvar[1] if fit_vrad else np.nan,
+                             np.nan])
 
         elif fit_method == 'dv':
             resample = True if resample is None else resample
@@ -249,7 +264,8 @@ class annulus(object):
                                     vlsr_mask=vlsr_mask,
                                     dv_mask=dv_mask,
                                     optimize_kwargs=optimize_kwargs)
-            popt = popt[:2] if fit_vrad else popt[:1]
+
+            popt = np.array([popt[0], popt[1] if fit_vrad else np.nan, np.nan])
             cvar = np.ones(popt.size) * np.nan
 
         elif fit_method == 'snr':
@@ -261,7 +277,8 @@ class annulus(object):
                                      vlsr_mask=vlsr_mask,
                                      dv_mask=dv_mask,
                                      optimize_kwargs=optimize_kwargs)
-            popt = popt[:2] if fit_vrad else popt[:1]
+
+            popt = np.array([popt[0], popt[1] if fit_vrad else np.nan, np.nan])
             cvar = np.ones(popt.size) * np.nan
 
         elif fit_method == 'sho':
@@ -274,6 +291,12 @@ class annulus(object):
                                            dv_mask=dv_mask,
                                            centroid_method=centroid_method,
                                            optimize_kwargs=optimize_kwargs)
+            popt = np.array([popt[0],
+                             popt[1] if fit_vrad else np.nan,
+                             popt[-1]])
+            cvar = np.array([cvar[0],
+                             cvar[1] if fit_vrad else np.nan,
+                             cvar[-1]])
             
         # If required, iterate using these results as a mask. This is only
         # available with SHO given that a systemic velocity is required.
@@ -289,26 +312,27 @@ class annulus(object):
             # on.
 
             try:
-                return self.get_vlos(p0=p0,
-                                    fit_method=fit_method,
-                                    fit_vrad=fit_vrad,
-                                    fix_vlsr=fix_vlsr,
-                                    vrot_mask=vrot_mask,
-                                    vlsr_mask=vlsr_mask,
-                                    vrad_mask=vrad_mask,
-                                    dv_mask=dv_mask,
-                                    resample=resample,
-                                    optimize=optimize,
-                                    nwalkers=nwalkers,
-                                    nburnin=nburnin,
-                                    nsteps=nsteps,
-                                    scatter=scatter,
-                                    signal=signal,
-                                    optimize_kwargs=optimize_kwargs,
-                                    mcmc=mcmc,
-                                    mcmc_kwargs=mcmc_kwargs,
-                                    centroid_method=centroid_method,
-                                    repeat_with_mask=repeat_with_mask-1)
+                popt, cvar = self.get_vlos(p0=p0,
+                                           fit_method=fit_method,
+                                           fit_vrad=fit_vrad,
+                                           fix_vlsr=fix_vlsr,
+                                           vrot_mask=vrot_mask,
+                                           vlsr_mask=vlsr_mask,
+                                           vrad_mask=vrad_mask,
+                                           dv_mask=dv_mask,
+                                           resample=resample,
+                                           optimize=optimize,
+                                           nwalkers=nwalkers,
+                                           nburnin=nburnin,
+                                           nsteps=nsteps,
+                                           scatter=scatter,
+                                           signal=signal,
+                                           optimize_kwargs=optimize_kwargs,
+                                           mcmc=mcmc,
+                                           mcmc_kwargs=mcmc_kwargs,
+                                           centroid_method=centroid_method,
+                                           repeat_with_mask=repeat_with_mask-1)
+
             except:
                 return popt, cvar
         
@@ -443,6 +467,7 @@ class annulus(object):
             plot_corner(samples, labels)
 
         # Return the requested values.
+
         returns = ['percentiles'] if returns is None else returns
         returns = [r.lower() for r in np.atleast_1d(returns)]
         if 'none' in returns:
@@ -887,7 +912,7 @@ class annulus(object):
             popt[-1] = (fix_vlsr - popt[-1]) / self.cosi
             cvar[-1] /= self.cosi
 
-        # Return the optimized values.
+        # Return the optimized, disk-frame values.
 
         return popt, cvar
 

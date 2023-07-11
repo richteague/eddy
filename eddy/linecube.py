@@ -202,8 +202,7 @@ class linecube(datacube):
         rpnts = samples[0][0]
         profiles = np.array([s[1] for s in samples])
 
-        # Calculate weights, making sure they are finite and not all summing to
-        # zero.
+        # Calculate weights, making sure they are finite with non-zero sum.
 
         if weighted_average:
             weights = [1.0 / s[2] for s in samples]
@@ -291,29 +290,17 @@ class linecube(datacube):
                                        mask_frame=mask_frame,
                                        user_mask=user_mask,
                                        beam_spacing=beam_spacing)
+
             output = annulus.get_vlos(**kw)
-
-            # Parse the outputs.
-
-            par = 2 if fit_vrad else 1
-            output = np.empty(par) if np.all(np.isnan(output)) else output
-            if fit_method.lower() in ['dv', 'snr']:
-                profiles += [output]
-                uncertainties += [np.ones(par) * np.nan]
-            elif fit_method.lower() == 'sho':
-                profiles += [output[0]]
-                uncertainties += [output[1]]
-            elif fit_method.lower() == 'gp':
-                profiles += [output[0]]
-                uncertainties += [output[1]]
+            profiles += [output[0]]
+            uncertainties += [output[1]]
 
         # Make sure the returned arrays are in the (nparam, nrad) form.
 
-        profiles = np.atleast_2d(profiles)
-        uncertainties = np.atleast_2d(uncertainties)
-        if profiles.shape[0] == rpnts.size:
-            profiles = profiles.T
-            uncertainties = uncertainties.T
+        profiles = np.atleast_2d(profiles).T
+        uncertainties = np.atleast_2d(uncertainties).T
+        assert profiles.shape[0] == uncertainties.shape[0] == 3
+        assert profiles.shape[1] == uncertainties.shape[1] == rpnts.size
 
         return rpnts, profiles, uncertainties
 
@@ -329,12 +316,18 @@ class linecube(datacube):
         Returns an annulus instance.
 
         Args:
-            r_min
-            r_max
-            phi_min
-            phi_max
-            exclude_phi
-            abs_phi
+            r_min (float): Inner radius of the annulus in [arcsec].
+            r_max (float): Outer radius of the annulus in [arcsec].
+            phi_min (Optional[float]): Minimum polar angle in [X] for the
+                annulus. ``phi`` is measured from the red-shifted major axis and
+                increases in a clockwise direction, spanning ``-pi`` to ``+pi``.
+            phi_max (Optional[float]): Maximum polar angle in [x] for the
+                annulus. ``phi`` is measured from the red-shifted major axis and
+                increases in a clockwise direction, spanning ``-pi`` to ``+pi``.
+            exclude_phi (Optional[bool]): If ``True``, exclude the polar angle
+                range rather than to include it.
+            abs_phi (Optional[bool]): If ``True``, consider only the absolute
+                values of ``phi`` in order to get a symmetric mask.
             x0 (Optional[float]): Source right ascension offset [arcsec].
             y0 (Optional[float]): Source declination offset [arcsec].
             inc (Optional[float]): Source inclination [degrees]. A positive
