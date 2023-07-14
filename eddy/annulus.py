@@ -291,6 +291,7 @@ class annulus(object):
                                            dv_mask=dv_mask,
                                            centroid_method=centroid_method,
                                            optimize_kwargs=optimize_kwargs)
+
             popt = np.array([popt[0],
                              popt[1] if fit_vrad else np.nan,
                              popt[-1]])
@@ -759,7 +760,8 @@ class annulus(object):
     # -- Minimizing Line Width Approach -- #
 
     def get_vlos_dV(self, p0=None, fit_vrad=False, resample=False,
-                    vlsr_mask=None, dv_mask=None, optimize_kwargs=None):
+            vrot_mask=None, vlsr_mask=None, vrad_mask=None, dv_mask=None, 
+            optimize_kwargs=None):
         """
         Infer the rotational (and optically radial) velocity by minimizing the
         width of the shifted-and-stacked azimuthally averaged spectrum.
@@ -771,8 +773,10 @@ class annulus(object):
             resample (optional[bool]): Resample the shifted spectra by this
                 factor. For example, resample = 2 will shift and bin the
                 spectrum down to sampling rate twice that of the original data.
-            vlsr_mask (optional[float]):
-            dv_mask (optional[float]):
+            vrot_mask (float): Disk-frame rotational velocity in [m/s].
+            vlsr_mask (optional[float]): Systemic velocity in [m/s].
+            vrad_mask (optional[float]): Disk-frame radial velocity in [m/s].
+            dv_mask (optional[float]): Half-width of the mask in [m/s].
             optimize_kwargs (optional[dict]): Kwargs to pass to ``minimize``.
 
         Returns:
@@ -800,16 +804,17 @@ class annulus(object):
 
         # Run the minimization.
 
+        args = (fit_vrad, resample, vrot_mask, vlsr_mask, vrad_mask, dv_mask)
         res = minimize(self.deprojected_width,
                        x0=p0,
-                       args=(fit_vrad, resample, vlsr_mask, dv_mask),
+                       args=args,
                        **optimize_kwargs)
         if not res.success:
             print("WARNING: minimize did not converge.")
         return res.x if res.success else np.nan
 
     def deprojected_width(self, theta, fit_vrad=False, resample=True,
-                          vlsr_mask=None, dv_mask=None):
+            vrot_mask=None, vlsr_mask=None, vrad_mask=None, dv_mask=None):
         """
         Return the Gaussian width of the deprojected and stacked spectra.
 
@@ -818,8 +823,10 @@ class annulus(object):
             fit_vrad (optional[bool]): Whether ``vrad`` in is ``theta``.
             resample (optional): How to resample the data.  See
                 :func:`deprojected_spectrum` for more details.
-            vlsr_mask (optional[float]):
-            dv_mask (optional[float]):
+            vrot_mask (float): Disk-frame rotational velocity in [m/s].
+            vlsr_mask (optional[float]): Systemic velocity in [m/s].
+            vrad_mask (optional[float]): Disk-frame radial velocity in [m/s].
+            dv_mask (optional[float]): Half-width of the mask in [m/s].
 
         Returns:
             The Doppler width of the average stacked spectrum using the
@@ -831,16 +838,17 @@ class annulus(object):
                                          vrad=vrad,
                                          resample=resample,
                                          scatter=False,
+                                         vrot_mask=vrot_mask,
                                          vlsr_mask=vlsr_mask,
+                                         vrad_mask=vrad_mask,
                                          dv_mask=dv_mask)
         return get_gaussian_width(*self._get_masked_spectrum(x, y))
 
     # -- Rotation Velocity by Fitting a SHO -- #
 
     def get_vlos_SHO(self, p0=None, fit_vrad=False, fix_vlsr=None,
-                     vrot_mask=None, vlsr_mask=None, vrad_mask=None,
-                     dv_mask=None, centroid_method='quadratic',
-                     optimize_kwargs=None):
+            vrot_mask=None, vlsr_mask=None, vrad_mask=None, dv_mask=None,
+            centroid_method='quadratic', optimize_kwargs=None):
         """
         Infer the disk-frame rotational (and, optionally, radial) velocity by
         finding velocity which best describes the azimuthal dependence of the
@@ -852,10 +860,10 @@ class annulus(object):
                 in the fit. Default is ``False``.
             fix_vlsr (optional[float]): If provided, use this value to deproject
                 the vertical velocity component.
-            vrot_mask
-            vlsr_mask
-            vrad_mask
-            dv_mask
+            vrot_mask (float): Disk-frame rotational velocity in [m/s].
+            vlsr_mask (optional[float]): Systemic velocity in [m/s].
+            vrad_mask (optional[float]): Disk-frame radial velocity in [m/s].
+            dv_mask (optional[float]): Half-width of the mask in [m/s].
             centroid_method (optional[str]): Method used to determine the line
                 centroids, and must be one of ``'quadratic'``, ``'max'``,
                 ``'gaussian'``, ``'doublegauss'`` or ``'doublegauss_fixeddv'``.
@@ -919,8 +927,8 @@ class annulus(object):
     # -- Rotation Velocity by Maximizing SNR -- #
 
     def get_vlos_SNR(self, p0=None, fit_vrad=False, resample=False,
-                     signal='int', vlsr_mask=None, dv_mask=None,
-                     optimize_kwargs=None):
+            signal='weighted', vrot_mask=None, vlsr_mask=None, vrad_mask=None,
+            dv_mask=None, optimize_kwargs=None):
         """
         Infer the rotation (and, optically, the radial) velocity by finding the
         rotation velocity (and radial velocities) which, after shifting all
@@ -936,9 +944,12 @@ class annulus(object):
                 factor. For example, resample = 2 will shift and bin the
                 spectrum down to sampling rate twice that of the original data.
             signal (Optional[str]): Method used to calculate the signal, either
-                'max' for the line peak or 'int' for the integrated intensity.
-            vlsr_mask (Optional[float]):
-            dv_mask (Optional[float]):
+                'max' for the line peak or 'int' for the integrated intensity or
+                'weighted' for a Gaussian weighted integrated intensity.
+            vrot_mask (float): Disk-frame rotational velocity in [m/s].
+            vlsr_mask (optional[float]): Systemic velocity in [m/s].
+            vrad_mask (optional[float]): Disk-frame radial velocity in [m/s].
+            dv_mask (optional[float]): Half-width of the mask in [m/s].
             optimize_kwargs (optional[dict]): Kwargs to pass to ``minimize``.
 
         Returns:
@@ -975,30 +986,25 @@ class annulus(object):
 
         # Run the minimization.
 
+        args = (fit_vrad, resample, signal, vrot_mask, vlsr_mask, vrad_mask, dv_mask)
         res = minimize(self.deprojected_nSNR,
                        x0=p0,
-                       args=(fit_vrad, resample, signal, vlsr_mask, dv_mask),
+                       args=args,
                        **optimize_kwargs)
         if not res.success:
             print("WARNING: minimize did not converge.")
         return res.x if res.success else np.nan
 
-    def deprojected_nSNR(self, theta, fit_vrad=False, resample=False,
-                         signal='int', vlsr_mask=None, dv_mask=None):
+    def deprojected_nSNR(self, theta, fit_vrad=False, resample=False, signal='weighted',
+            vrot_mask=None, vlsr_mask=None, vrad_mask=None, dv_mask=None):
         """
         Return the negative SNR of the deprojected spectrum. There are three
         ways to calculate the signal of the data. ``signal='max'`` will use the
         Gaussian peak relative to the noise, ``signal='int'`` will use the
         integrated spectrum as the signal, while ``signal='weighted'`` will
         additionally use a Gaussian shape weighting so that noise in the line
-        wings are minimized, as in `Yen et al. (2016)`_.
-
-        .. warning::
-
-            Currently the noise is calculated based on pixels greater than
-            three line widths away from the line center. As both the line
-            center and width changes from call to call, the noise will change
-            too.
+        wings are minimized, as in `Yen et al. (2016)`_. The default method is
+        ``signal='weighted'``.
 
         Args:
             theta (list): Disk-frame velocities, ``(vrot[, vrad])``.
@@ -1006,8 +1012,10 @@ class annulus(object):
             resample (optional): How to resample the data. See
                 :func:`deprojected_spectrum` for more details.
             signal (optional[str]): Definition of SNR to use.
-            vlsr_mask (optional[float]):
-            dv_mask (optional[float]):
+            vrot_mask (float): Disk-frame rotational velocity in [m/s].
+            vlsr_mask (optional[float]): Systemic velocity in [m/s].
+            vrad_mask (optional[float]): Disk-frame radial velocity in [m/s].
+            dv_mask (optional[float]): Half-width of the mask in [m/s].
 
         Returns:
             Negative of the signal-to-noise ratio.
@@ -1018,19 +1026,22 @@ class annulus(object):
                                          vrad=vrad,
                                          resample=resample,
                                          scatter=False,
+                                         vrot_mask=vrot_mask,
                                          vlsr_mask=vlsr_mask,
+                                         vrad_mask=vrad_mask,
                                          dv_mask=dv_mask)
-
         x0, dx, A = fit_gaussian(x, y)
-        noise = np.std(x[(x - x0) / dx > 3.0])  # Check: noise will vary.
+
+        noise = self._estimate_RMS() / np.sqrt(self.theta.size)
+
         if signal == 'max':
             SNR = A / noise
         else:
             if signal == 'weighted':
-                w = gaussian(x, x0, dx, (np.sqrt(np.pi) * dx)**-1)
+                w = gaussian(x, x0, dx, (np.sqrt(np.pi) * abs(dx))**-1)
             else:
                 w = np.ones(x.size)
-            mask = (x - x0) / dx <= 3.0
+            mask = abs(x - x0) / dx <= 3.0
             SNR = np.trapz((y * w)[mask], x=x[mask])
         return -SNR
 
@@ -1072,41 +1083,68 @@ class annulus(object):
         vrad_proj = -vrad * np.sin(self.theta) * np.sin(self.inc_rad)
         return vrot_proj + vrad_proj + vlsr
 
-    def deprojected_spectra(self, vrot, vrad=0.0, kind='linear', weights=None):
+    def deprojected_spectra(self, vrot, vrad=0.0, kind='linear', smooth=None,
+            vrot_mask=None, vlsr_mask=0.0, vrad_mask=None, dv_mask=None):
         """
-        Returns all deprojected points as an ensemble.
+        Returns all deprojected points as an ensemble. If a velocity mask is
+        defined then these pixels will be converted to NaNs such that the
+        returned array is the same shape as ``self.spectra``. The shifted
+        spectra will be on the same velocity axis as the attached cube.
 
         Args:
             vrot (float): Disk-frame rotation velocity in [m/s].
             vrad (optional[float]): Disk-frame radial velocity in [m/s].
             kind (optional[str]): Interpolation kind to use.
-            weights (optional): The weights used to smooth the data prior to
+            smooth (optional): The weights used to smooth the data prior to
                 shifting. If a ``float`` or ``int`` is provided, will interpret
                 this as a top-hat function with that width.
+            vrot_mask (float): Disk-frame rotational velocity in [m/s].
+            vlsr_mask (optional[float]): Systemic velocity in [m/s].
+            vrad_mask (optional[float]): Disk-frame radial velocity in [m/s].
+            dv_mask (optional[float]): Half-width of the mask in [m/s].
 
         Returns:
-            A (M, N) shaped array of M spectra over N velocity points.
+            A ``(M, N)`` shaped array of ``M`` spectra over ``N`` velocity points.
         """
 
-        vlos = self.calc_vlos(vrot=vrot, vrad=vrad)
+        # Smooth the spectra before interpolating.
+        
         spectra = self.spectra.copy()
-
-        if weights is not None:
+        if smooth is not None:
             from scipy.ndimage import convolve1d
-            if isinstance(weights, (float, int)):
-                weights = np.ones(int(weights)) / float(weights)
-            spectra_a = convolve1d(spectra, weights, axis=1)
-            spectra_b = convolve1d(spectra[:, ::-1], weights, axis=1)[:, ::-1]
+            if isinstance(smooth, (float, int)):
+                smooth = np.ones(int(smooth)) / float(smooth)
+            spectra_a = convolve1d(spectra, smooth, axis=1)
+            spectra_b = convolve1d(spectra[:, ::-1], smooth, axis=1)[:, ::-1]
             spectra = np.nanmean([spectra_a, spectra_b], axis=0)
+
+        # Apply the mask if necessary.
+
+        velocity_mask = self.get_velocity_mask(vrot_mask=vrot_mask,
+                                               vlsr_mask=vlsr_mask,
+                                               vrad_mask=vrad_mask,
+                                               dv_mask=dv_mask)
+
+        spectra = np.where(velocity_mask, spectra, np.nan)
+
+        # Interpolate the data onto the new grid.
 
         from scipy.interpolate import interp1d
 
         s = []
+        vlos = self.calc_vlos(vrot=vrot, vrad=vrad)
         for dv, spectrum in zip(vlos, spectra):
             mask = np.isfinite(spectrum)
-            s += [interp1d(self.velax[mask] - dv, spectrum[mask],
-                           kind=kind, bounds_error=False)(self.velax)]
-        return np.array(s)
+            s += [interp1d(x=self.velax[mask]-dv,
+                           y=spectrum[mask],
+                           kind=kind,
+                           fill_value=np.nan,
+                           bounds_error=False)(self.velax)]
+        s = np.array(s)
+        if s.shape == self.spectra.shape:
+            return s
+        else:
+            raise ValueError("Incorrect deprojected spectra shape.")
 
     def get_river(self, vrot=0.0, vrad=0.0, kind='linear', weights=None,
                   method='nearest'):
@@ -1134,10 +1172,11 @@ class annulus(object):
         return self.theta_grid, self.velax_grid, river
 
     def deprojected_spectrum(self, vrot, vrad=0.0, resample=True, scatter=True,
-                             vlsr_mask=None, dv_mask=None):
+            vrot_mask=None, vlsr_mask=None, vrad_mask=None, dv_mask=None):
         """
         Returns ``(x, y[, dy])`` of the collapsed and deprojected spectrum
-        using the provided velocities to deproject the data.
+        using the provided velocities to deproject the data. When collapsing the
+        spectra the velocity grid can be changed with the ``resample`` argument.
         
         Note that the rotational and radial velocities are specified in the disk
         frame and do not take into account the projection along the line of
@@ -1162,65 +1201,104 @@ class annulus(object):
         It is important to disgintuish between ``float`` and ``int`` arguments
         for ``resample``.
 
+        A mask can also be applied to the data assuming azimuthally symmetric
+        rotational and radial velocities.
+
         Args:
             vrot (float): Disk-frame rotational velocity in [m/s].
             vrad (optional[float]): Disk-frame radial velocity in [m/s].
             resample (optional): Type of resampling to be applied.
             scatter (optional[bool]): If the spectrum is resampled, whether to
                 return the scatter in each velocity bin.
-            vlsr_mask (optional[float]):
-            dv_mask (optional[float]):
+            vrot_mask (float): Disk-frame rotational velocity in [m/s].
+            vlsr_mask (optional[float]): Systemic velocity in [m/s].
+            vrad_mask (optional[float]): Disk-frame radial velocity in [m/s].
+            dv_mask (optional[float]): Half-width of the mask in [m/s].
 
         Returns:
             A deprojected spectrum, resampled using the provided method.
         """
+        
         vlos = self.calc_vlos(vrot=vrot, vrad=vrad)
         vpnts = self.velax[None, :] - vlos[:, None]
-        vpnts, spnts = self._order_spectra(vpnts=vpnts.flatten())
+        spnts = self.spectra.copy()
+
+        # Apply the velocity mask.
+
+        velocity_mask = self.get_velocity_mask(vrot_mask=vrot_mask,
+                                               vlsr_mask=vlsr_mask,
+                                               vrad_mask=vrad_mask,
+                                               dv_mask=dv_mask)
+
+        # Order the spectra in increasing velocity and then resample them.
+
+        vpnts, spnts = self._order_spectra(vpnts=vpnts[velocity_mask],
+                                           spnts=spnts[velocity_mask])
+        
         x, y, dy = self._resample_spectra(vpnts=vpnts,
                                           spnts=spnts,
                                           resample=resample,
                                           scatter=True)
-        if vlsr_mask is not None:
-            if dv_mask is None:
-                dv_mask = 2.0 * self.chan
-            mask = abs(x - vlsr_mask) <= dv_mask
-        else:
-            mask = np.isfinite(y)
+
+        mask = np.isfinite(y)
         if scatter:
             return x[mask], y[mask], dy[mask]
         return x[mask], y[mask]
-
-    def get_masked_spectra(self, vrot_mask, vlsr_mask, vrad_mask=None, dv_mask=None):
+    
+    def get_velocity_mask(self, vrot_mask=None, vlsr_mask=0.0, vrad_mask=None, dv_mask=None):
         """
-        Returns spectra masked only around the line peaks based on the provided
-        velocity profile.
+        Returns a mask based on an assumed rotational and radial velocity
+        component. Note that all velocities are provided in the disk-frame.
+        By default the half-width of the mask if 5 times the channel spacing.
 
         Args:
-            vrot_mask (float): TBD
-            vlsr_mask (float): TBD
-            vrad_mask (float): TBD
-            dv_mask (float): TBD
+            vrot_mask (optional[float]): Disk-frame rotational velocity in [m/s].
+            vlsr_mask (optional[float]): Systemic velocity in [m/s].
+            vrad_mask (optional[float]): Disk-frame radial velocity in [m/s].
+            dv_mask (optional[float]): Half-width of the mask in [m/s].
 
         Returns:
-            velax, spectra (array, array): TBD
+            mask (array): A 2D mask for to be applied to ``self.spectra``.
         """
         if vrot_mask is None:
-            return [self.velax for _ in self.spectra], self.spectra
+            return np.ones(self.spectra.shape).astype('bool')
         if vlsr_mask is None:
-            raise ValueError("Must specify 'vlsr' explicity.")
+            vlsr_mask = 0.0
         if vrad_mask is None:
             vrad_mask = 0.0
         if dv_mask is None:
-            dv_mask = 2.0 * self.chan
+            dv_mask = 5.0 * self.chan
         if dv_mask < self.chan:
             raise ValueError("`dv_mask` must be at least the channel spacing.")
         mask = self.calc_vlos(vrot=vrot_mask,
                               vrad=vrad_mask,
                               vlsr=vlsr_mask)
         mask = abs(mask[:, None] - self.velax[None, :]) <= dv_mask
-        velax = [self.velax[m] for m in mask]
-        spectra = [s[m] for s, m in zip(self.spectra, mask)]
+        return np.array(mask)
+
+    def get_masked_spectra(self, vrot_mask, vlsr_mask=0.0, vrad_mask=None,
+                           dv_mask=None):
+        """
+        Returns spectra masked only around the line peaks based on the provided
+        velocity profile. Note that all mask velocities are provided in the
+        disk-frame.
+
+        Args:
+            vrot_mask (float): Disk-frame rotational velocity in [m/s].
+            vlsr_mask (optional[float]): Systemic velocity in [m/s].
+            vrad_mask (optional[float]): Disk-frame radial velocity in [m/s].
+            dv_mask (optional[float]): Half-width of the mask in [m/s].
+
+        Returns:
+            velax, spectra (array, array): A 2D array of the velocity points and
+                the spectra.
+        """
+        mask = self.get_velocity_mask(vrot_mask=vrot_mask,
+                                      vlsr_mask=vlsr_mask,
+                                      vrad_mask=vrad_mask,
+                                      dv_mask=dv_mask)
+        velax = np.array([self.velax[m] for m in mask])
+        spectra = np.array([s[m] for s, m in zip(self.spectra, mask)])
         return velax, spectra
 
     def line_centroids(self, method='quadratic', vrot_mask=None, vlsr_mask=None,
@@ -1239,10 +1317,10 @@ class annulus(object):
                 Foreman-Mackey 2018 for details) and 'gaussian', 'gaussthick'
                 'doublegauss' and 'doublegauss_fixeddv' fit (an) analytical
                 Gaussian profile(s) to the line.
-            vrot_mask (Optional[float]): TBD
-            vrad_mask (Optional[float]): TBD
-            vlsr_mask (Optional[float]): TBD
-            dv_mask (Optional[float]): TBD
+            vrot_mask (float): Disk-frame rotational velocity in [m/s].
+            vlsr_mask (optional[float]): Systemic velocity in [m/s].
+            vrad_mask (optional[float]): Disk-frame radial velocity in [m/s].
+            dv_mask (optional[float]): Half-width of the mask in [m/s].
 
         Returns:
             vmax, dvmax (array, array): Line centroids and associated
@@ -1301,8 +1379,10 @@ class annulus(object):
         return vmax, dvmax
 
     def _order_spectra(self, vpnts, spnts=None):
-        """Return velocity order spectra."""
+        """Return velocity ordered spectra removing any NaNs."""
         spnts = self.spectra_flat if spnts is None else spnts
+        nan_mask = np.isfinite(spnts)
+        vpnts, spnts = vpnts[nan_mask], spnts[nan_mask]
         if len(spnts) != len(vpnts):
             raise ValueError("Wrong size in 'vpnts' and 'spnts'.")
         idxs = np.argsort(vpnts)
