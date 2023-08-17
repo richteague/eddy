@@ -50,8 +50,6 @@ class rotationmap(datacube):
                           force_center=force_center)
 
         # Check to see what unit the velocities are in.
-        # TODO: Sometimes the bunit is not m/s or km/s so we might want to
-        # include a check.
 
         if self.header['bunit'].lower() not in ['m/s', 'km/s']:
             msg = "What is the velocity unit? Either `m/s` or `km/s`."
