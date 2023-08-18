@@ -43,6 +43,7 @@ class rotationmap(datacube):
 
     priors = {}
     SHO_priors = {}
+    _vortex_layers = 2
 
     def __init__(self, path, FOV=None, uncertainty=None, downsample=None,
                  fill=None, force_center=False):
@@ -1056,6 +1057,16 @@ class rotationmap(datacube):
         else:
             params['vfunc'] = self._vkep
 
+        # Vortex model.
+
+        if params['r0_vortex'] is not None:
+            if params['p0_vortex'] is not None:
+                params['vortex'] = True
+            else:
+                raise ValueError("Must specify by `r0_vortex` and `p0_vortex'.")
+        else:
+            params['vortex'] = False
+
         # Deprojection properties.
 
         params['z_func'] = params.pop('z_func', None)
@@ -1065,7 +1076,7 @@ class rotationmap(datacube):
         return params
 
     def evaluate_models(self, samples=None, params=None, draws=50,
-                        collapse_func=np.mean, coords_only=False,
+                        collapse_func=np.median, coords_only=False,
                         profile_only=False):
         """
         Evaluate models based on the samples provided and the parameter
@@ -1153,7 +1164,101 @@ class rotationmap(datacube):
 
         else:
             raise ValueError("'draws' must be a float or integer.")
+        
+    def evaluate_models_vortex(self, samples=None, params=None, draws=50,
+            collapse_func=np.median, frame=None):
+        """
+        Evaluate the vortex model. Same functionality as ``evaluate_models`` but
+        only for evaluating the vortex model. The frame of reference can be
+        chosen with the options being ``None``, the default which returns just
+        the on-sky projection, ``'sky'``, ``'face-on'``, ``'polar'`` and
+        ``'vortex'``. The ``'sky'`` frame includes the projection of the
+        velocity along the line of sight, while the ``'face-on'``, ``'polar'``
+        and ``'vortex'`` frames are the intrinsic velocities. Note that for all
+        frames other than ``'sky'`` the model is on an unstructured grid so will
+        require gridding if used for a figure.
 
+        Args:
+            samples (ndarray): An array of samples returned from ``fit_map``.
+            params (dict): The parameter dictionary passed to ``fit_map``.
+            draws (Optional[int/float]): If an integer, describes the number of
+                random draws averaged to form the returned model. If a float,
+                represents the percentile used from the samples. Must be
+                between 0 and 1 if a float.
+            collapse_func (Optional[callable]): How to collapse the random
+                number of samples. Must be a function which allows an ``axis``
+                argument (as with most Numpy functions).
+            frame (Optional[None/str]): The frame for the projection of the
+                velocity components. If ``frame=None`` then the on-sky
+                projection is used and no associated coordinates are returned.
+
+        Returns:
+            [x, y,] v ([array, array,] array): The vortex velocity model along
+                with the associated coordinate values if ``frame`` is specified.
+        """
+
+        # Check the input -- must provide at least a `params` dictionary.
+
+        if params is None:
+            raise ValueError("Must provide model parameters dictionary.")
+        
+        # NOTE: Calculate the coordinates needed for this. Note that this won't
+        # be exactly the same draws (if draws > 1) but for a well sampled
+        # posterior and a large enough draw value this should be OK...
+        
+        rvals, tvals, _ = self.evaluate_models(samples=samples,
+                                               params=params,
+                                               draws=draws,
+                                               coords_only=True)
+
+        # Model is fully specified and no draws are needed.
+
+        if samples is None:
+            verified_params = self.verify_params_dictionary(params.copy())
+            return self._make_model_vortex(rvals=rvals, 
+                                           tvals=tvals,
+                                           params=verified_params,
+                                           frame=frame)
+        
+        # Now do a random number of draws. Check to make sure the `params`
+        # dictionary has the same number of free parameters as there are in
+        # `samples`.
+
+        nparam = np.sum([type(params[k]) is int for k in params.keys()])
+        if samples.shape[1] != nparam:
+            warning = "Invalid number of free parameters in 'samples': {:d}."
+            raise ValueError(warning.format(nparam))
+        if not callable(collapse_func):
+            raise ValueError("'collapse_func' must be callable.")
+        verified_params = self.verify_params_dictionary(params.copy())
+
+        # Average over draw of random model samples.
+
+        if isinstance(int(draws) if draws > 1.0 else draws, int):
+            models = []
+            for idx in np.random.randint(0, samples.shape[0], draws):
+                tmp = self._populate_dictionary(samples[idx], verified_params)
+                models += [self._make_model_vortex(rvals=rvals, 
+                                                   tvals=tvals,
+                                                   params=tmp,
+                                                   frame=frame)]
+            return collapse_func(models, axis=0)
+        
+        # Take a percentile of the samples.
+
+        elif isinstance(draws, float):
+            tmp = np.percentile(samples, draws, axis=0)
+            tmp = self._populate_dictionary(tmp, verified_params)
+            self._make_model(rvals=rvals, 
+                             tvals=tvals,
+                             params=tmp,
+                             frame=frame)
+
+        # Otherwise `draws` is invalid.
+
+        else:
+            raise ValueError("'draws' must be a float or integer.")
+        
     def save_model(self, samples=None, params=None, model=None, filename=None,
                    overwrite=True):
         """
@@ -1307,6 +1412,98 @@ class rotationmap(datacube):
             taper = np.exp(-np.power(taper, 2.0))
             vpow *= np.where(rvals <= r_p, 1.0, taper)
         return vpow
+    
+    def _make_model_vortex(self, rvals, tvals, params, frame=None):
+        """
+        Vortex velocity profile projected onto the requested frame. Can return
+        the model in a range of frames-of-reference through the ``frame``
+        argument. This accepts ``None``, ``'vortex'``, ``'polar'``,
+        ``'face-on'`` and ``'sky'``. If ``frame=None`` (default) then the on-sky
+        projection is returned without associated coordinates.
+
+        Args:
+            rvals (array): 2D array of the deprojected radial disk coordinates
+                in [arcsec].
+            tvals (array): 2D array of the deprojected polar disk coordinates
+                in [radians].
+            params (dict): Dictionary of model parameters.
+            frame (Optional[str]): If provided, the frame of the vortex velocity
+                model to be returned in along with associated coordinates. If no
+                frame is specified just the on-sky projected velocity will be
+                returned.
+
+        Returns:
+            [x, y,] v ([array, array,] array): The vortex velocity model along
+                with the associated coordinate values if ``frame`` is specified.
+        """
+
+        # Loop through (at least 1) layers to extent the azimuthal map for
+        # vortices which overlap.
+
+        x_vortex, y_vortex, v_vortex = [], [], []
+        v_disk_stack, v_proj_stack = [], []
+
+        for i in range(-(self._vortex_layers-1), self._vortex_layers):
+
+            # Shift in the polar angle.
+
+            dtheta = i * 2.0 * np.pi
+            tvals_tmp = tvals + dtheta 
+
+            # (x_tmp, y_tmp) describe the vortex cartesian frame.
+
+            x_tmp = params['r0_vortex'] * (tvals_tmp - np.radians(params['p0_vortex']))
+            y_tmp = rvals - params['r0_vortex']
+            x_vortex = np.append(x_vortex, x_tmp)
+            y_vortex = np.append(y_vortex, y_tmp)
+
+            # (r_tmp, p_tmp) describe the disk polar frame.
+
+            r_tmp = np.hypot(x_tmp, params['chi_vortex'] * y_tmp)
+            p_tmp = np.arctan2(x_tmp, params['chi_vortex'] * y_tmp)
+            p_tmp = np.clip(p_tmp, a_min=-np.pi, a_max=np.pi)
+
+            # Model the vortex radial velocity profile as a Gaussian.
+
+            v_tmp = ((r_tmp - params['r_vortex']) / params['w_vortex'])**2
+            v_tmp = params['v_vortex'] * np.exp(-v_tmp)
+            v_vortex = np.append(v_vortex, v_tmp)
+            v_disk_stack += [v_tmp]
+
+            # Project the vortex velocity onto the sky.
+
+            v_proj_tmp = v_tmp * np.cos(tvals_tmp + p_tmp)
+            v_proj_tmp *= np.sin(abs(np.radians(params['inc'])))
+            v_proj_stack += [v_proj_tmp]
+
+        # Combine the different layers by summing them up. Note that this will
+        # give rise to odd effects if the vortex tails are overlapping.
+
+        v_disk = np.sum(v_disk_stack, axis=0)
+        v_proj = np.sum(v_proj_stack, axis=0)
+
+        # Return the vortex model along with the appropriate coordinates.
+        # Note that in the `vortex`, `polar` or  `face-on` frame the velocity
+        # isn't projected along the line of sight.
+
+        if frame is None:
+            return v_proj
+        elif frame == 'vortex':
+            assert x_vortex.shape == y_vortex.shape == v_vortex.shape
+            return x_vortex, y_vortex, v_vortex
+        elif frame == 'polar':
+            assert rvals.shape == tvals.shape == v_disk.shape
+            return rvals, tvals, v_disk
+        elif frame == 'face-on':
+            x_disk = rvals * np.cos(tvals)
+            y_disk = rvals * np.sin(tvals)
+            assert x_disk.shape == y_disk.shape == v_disk.shape
+            return x_disk, y_disk, v_disk
+        elif frame == 'sky':
+            x_sky, y_sky = np.meshgrid(self.xaxis, self.yaxis)
+            assert x_sky.shape == y_sky.shape == v_proj.shape
+            return x_sky, y_sky, v_proj
+
 
     def _proj_vphi(self, v_phi, tvals, params):
         """Project the rotational velocity onto the sky."""
@@ -1322,11 +1519,30 @@ class rotationmap(datacube):
 
     def _make_model(self, params):
         """Build the velocity model from the dictionary of parameters."""
+
+        # Get the model pixel-to-disk mappings.
+
         rvals, tvals, zvals = self.disk_coords(**params)
+
+        # Calculate the velocity profile and project. This includes an
+        # additional component from the vortex.
+
         vphi = params['vfunc'](rvals, tvals, zvals, params)
-        v0 = self._proj_vphi(vphi, tvals, params) + params['vlsr']
+        vphi_proj = self._proj_vphi(vphi, tvals, params)
+        if params['vortex']:        
+            vvor_proj = self._make_model_vortex(rvals, tvals, params)
+        else:
+            vvor_proj = 0.0
+
+        v0 = vphi_proj + vvor_proj + params['vlsr']
+
+        # Convolve if necessary.
+
         if params['beam']:
             v0 = datacube._convolve_image(v0, self._beamkernel())
+
+        # Return.
+
         return v0
 
     def _make_profile(self, params):
