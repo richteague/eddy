@@ -8,7 +8,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name="astro-eddy",
-    version="2.4.0",
+    version="2.4.1",
     author="Richard Teague",
     author_email="rteague@mit.edu",
     description=("Tools to study the dynamics of protoplanetary disks."),
